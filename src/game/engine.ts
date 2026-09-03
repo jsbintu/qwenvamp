@@ -11,7 +11,7 @@ import type {
 import { isWeapon, PASSIVE_IDS, WEAPON_IDS } from './types';
 import { sfx, setMuted } from './audio';
 import {
-  Animator, SPR_R, drawFx, fxFrame, getFogs, getProp, getTileCanvas, propAt,
+  Animator, SPR_R, drawFx, fxFrame, getFogs, getProp, getSheet, getTileCanvas, propAt,
   TILE, tileVariant,
 } from './sprites';
 
@@ -81,6 +81,7 @@ export interface Callbacks {
   onChest: (r: ChestReward[]) => void;
   onEvolve: (name: string, desc: string, flagship: boolean) => void;
   onBanner: (t: string, sub?: string) => void;
+  onError?: (msg: string) => void;
 }
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
@@ -1988,20 +1989,33 @@ export class GloomfallEngine {
 
   /* ================================= DRAW ================================= */
 
+  private errCount = 0;
+
   private loop = (now: number) => {
     this.raf = requestAnimationFrame(this.loop);
     let raw = (now - this.last) / 1000;
     this.last = now;
     raw = Math.min(raw, 0.05);
-    if (!this.paused && !this.uiLock) {
-      if (this.freeze > 0) {
-        this.freeze -= raw;
-      } else {
-        this.timeScale += (1 - this.timeScale) * Math.min(1, raw * 2.2);
-        this.update(raw * this.timeScale);
+    try {
+      if (!this.paused && !this.uiLock) {
+        if (this.freeze > 0) {
+          this.freeze -= raw;
+        } else {
+          this.timeScale += (1 - this.timeScale) * Math.min(1, raw * 2.2);
+          this.update(raw * this.timeScale);
+        }
+      }
+      this.draw();
+    } catch (err) {
+      /* keep the game alive across a bad frame; report once */
+      this.errCount++;
+      if (this.errCount <= 3) {
+        const msg = err instanceof Error ? `${err.message}\n${err.stack?.split('\n')[1] ?? ''}` : String(err);
+        this.cb.onError?.(msg);
+        // eslint-disable-next-line no-console
+        console.error('[Gloomfall] frame error:', err);
       }
     }
-    this.draw();
   };
 
   private draw() {
@@ -2483,7 +2497,24 @@ export class GloomfallEngine {
     c.fill();
     let alpha = 1;
     if (this.iframe > 0 && Math.floor(this.time * 18) % 2 === 0) alpha = 0.55;
-    this.panim.draw(c, x, y + 4, 1.06, this.facing < 0, alpha);
+    if (getSheet(`player-${this.classId}`)) {
+      this.panim.draw(c, x, y + 4, 1.06, this.facing < 0, alpha);
+    } else {
+      /* emergency vector fallback so the hero is never invisible */
+      c.globalAlpha = alpha;
+      c.fillStyle = CLASSES[this.classId].color;
+      c.strokeStyle = '#120a1c';
+      c.lineWidth = 3;
+      c.beginPath();
+      c.arc(x, y, 17, 0, Math.PI * 2);
+      c.fill();
+      c.stroke();
+      c.fillStyle = '#fff';
+      c.beginPath();
+      c.arc(x + this.facing * 4 - 3, y - 3, 2.6, 0, Math.PI * 2);
+      c.arc(x + this.facing * 4 + 3, y - 3, 2.6, 0, Math.PI * 2);
+      c.fill();
+    }
     c.restore();
   }
 

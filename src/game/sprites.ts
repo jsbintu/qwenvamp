@@ -1884,9 +1884,34 @@ export async function bakeAll(onProgress?: (p: number) => void): Promise<void> {
   jobs.push(buildFog);
 
   for (let i = 0; i < jobs.length; i++) {
-    jobs[i]();
+    try {
+      jobs[i]();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[Gloomfall] sprite bake job failed:', err);
+    }
     onProgress?.((i + 1) / jobs.length);
     await new Promise((r) => requestAnimationFrame(r));
+  }
+  /* verify critical sheets; retry anything that silently failed */
+  for (const cls of ['barbarian', 'necromancer', 'sorceress'] as ClassId[]) {
+    if (!sheets.has(`player-${cls}`)) {
+      try {
+        bakeSheet(`player-${cls}`, 112, 112, playerClips(cls));
+      } catch { /* fallback painter handles it */ }
+    }
+  }
+  for (const skin of Object.keys(ENEMY_LOOKS)) {
+    if (!sheets.has(`en-${skin}`)) {
+      try {
+        const s = skin as SkinId;
+        const fw = BOSSES.has(s) ? 224 : s === 'brute' ? 160 : 96;
+        bakeSheet(`en-${s}`, fw, fw, enemyClips(s));
+      } catch { /* ignore */ }
+    }
+  }
+  if (!tileCanvas) {
+    try { buildTiles(); } catch { /* ignore */ }
   }
   baked = true;
   onProgress?.(1);
