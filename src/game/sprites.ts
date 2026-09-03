@@ -638,6 +638,7 @@ interface EnemyLook {
   feat: Feat;
   face?: (c: CanvasRenderingContext2D, hy: number, hr: number, f: number, n: number, pose: Pose) => void;
   overlay?: (c: CanvasRenderingContext2D, pose: Pose, f: number, n: number, clip: string) => void;
+  custom?: (c: CanvasRenderingContext2D, pose: Pose, f: number, n: number) => void;
 }
 
 const ENEMY_LOOKS: Record<string, EnemyLook> = {
@@ -781,22 +782,127 @@ const ENEMY_LOOKS: Record<string, EnemyLook> = {
       demonFace(c, hy, hr, '#ff3d3d', { tusks: true });
     },
   },
+  cinder: {
+    feat: { r: 12, pal: { hi: '#ffb08a', mid: '#ff6b3d', lo: '#8c2410', eye: '#ffe14d', horn: '#5c1608' }, fat: true, horns: 'straight', tusks: true },
+    face: (c, hy, hr) => demonFace(c, hy, hr, '#ffe14d', { jaw: 0.9 }),
+    overlay: (c, _P, f, n) => {
+      const t = 0.5 + Math.sin((f / n) * TAU * 2) * 0.5;
+      const g = c.createRadialGradient(0, 6, 1, 0, 6, 14);
+      g.addColorStop(0, `rgba(255,240,180,${0.5 + t * 0.5})`);
+      g.addColorStop(1, 'rgba(255,100,40,0)');
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(0, 6, 14, 0, TAU);
+      c.fill();
+      c.restore();
+    },
+  },
+  caller: {
+    feat: { r: 16, pal: { hi: '#e8e0cc', mid: '#c9bfa8', lo: '#6b6350', eye: '#9be85e', cloth: '#4a4238', horn: '#c9bfa8' }, robe: true, hood: true, staff: true, horns: 'none' },
+    face: (c, hy, hr) => demonFace(c, hy, hr, '#9be85e'),
+  },
+  worm: {
+    feat: { r: 16, pal: { hi: '#d8b088', mid: '#b08968', lo: '#5c4226', eye: '#ffd23d' }, horns: 'none' },
+    custom: (c, P, f, n) => {
+      const und = Math.sin((f / n) * TAU + P.flap) * 3;
+      /* tail segments */
+      for (let i = 3; i >= 1; i--) {
+        sphere(c, -i * 9 + und * (i * 0.25), 6 - i * 1.5, 11 - i * 1.6, '#d8b088', '#b08968', '#5c4226', 1, 0.92);
+      }
+      /* head */
+      sphere(c, 2 + und * 0.4, -4, 13, '#e8c8a0', '#c9a075', '#6b4c2c');
+      /* maw */
+      c.fillStyle = '#3d1c10';
+      c.strokeStyle = OUT;
+      c.lineWidth = 2.4;
+      c.beginPath();
+      c.ellipse(7 + und * 0.4, -6, 6.5, 7.5, 0, 0, TAU);
+      c.fill();
+      c.stroke();
+      c.fillStyle = '#f4e8cf';
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * TAU;
+        const tx = 7 + Math.cos(a) * 5 + und * 0.4;
+        const ty = -6 + Math.sin(a) * 6;
+        c.beginPath();
+        c.moveTo(tx - 1.6, ty);
+        c.lineTo(tx + Math.cos(a) * 3.2, ty + Math.sin(a) * 3.2);
+        c.lineTo(tx + 1.6, ty);
+        c.closePath();
+        c.fill();
+      }
+      glowDot(c, -2, -12, 2.4, '#ffd23d');
+      glowDot(c, 4, -13, 2.4, '#ffd23d');
+    },
+  },
+  knight: {
+    feat: { r: 18, pal: { hi: '#d8707c', mid: '#b8434f', lo: '#5c1620', eye: '#ff6b4d', horn: '#3d3d4d', cloth: '#3d3d4d' }, horns: 'straight', shield: true, tusks: true },
+    face: (c, hy, hr) => demonFace(c, hy, hr, '#ff6b4d', { tusks: true, grim: true }),
+  },
+  shade: {
+    feat: { r: 14, pal: { hi: '#e8f6ff', mid: '#a8d8e8', lo: '#3d7d92', eye: '#7fd4e8', cloth: '#2a5c7d' }, robe: true, hood: true, translucent: 0.8, horns: 'none' },
+    face: (c, hy, hr) => {
+      glowDot(c, -hr * 0.3, hy, hr * 0.1, '#bfeaff');
+      glowDot(c, hr * 0.3, hy, hr * 0.1, '#bfeaff');
+    },
+  },
+  carrier: {
+    feat: { r: 19, pal: { hi: '#f0e0a0', mid: '#d8c04d', lo: '#7a6420', eye: '#ffffff' }, fat: true, horns: 'none' },
+    face: (c, hy, hr) => demonFace(c, hy, hr, '#ffffff', { jaw: 0.6 }),
+    overlay: (c, _P, f, n) => {
+      const t = 0.5 + Math.sin((f / n) * TAU) * 0.5;
+      c.fillStyle = '#8a9c2a';
+      for (let i = 0; i < 5; i++) {
+        const a = i * 1.4 + 0.7;
+        const pr = 3 + (i % 3) + t * 1.5;
+        c.beginPath();
+        c.arc(Math.cos(a) * 10, Math.sin(a) * 8 + 2, pr, 0, TAU);
+        c.fill();
+      }
+    },
+  },
+  bloodraven: {
+    feat: { r: 26, pal: { hi: '#e88a95', mid: '#c04d5c', lo: '#4d1018', eye: '#ff3d3d', horn: '#2a0a10' }, wings: true, ears: true, horns: 'crown', tusks: true },
+    face: (c, hy, hr) => demonFace(c, hy, hr, '#ff3d3d', { tusks: true, jaw: 0.8 }),
+  },
+  bonetyrant: {
+    feat: { r: 30, pal: { hi: '#fff8e8', mid: '#e8e0cc', lo: '#8a8064', eye: '#9be85e', horn: '#f4e8cf', cloth: '#5c1620' }, horns: 'crown', robe: true },
+    face: (c, hy, hr) => {
+      c.fillStyle = '#120a1c';
+      c.beginPath();
+      c.arc(-hr * 0.3, hy - hr * 0.08, hr * 0.2, 0, TAU);
+      c.arc(hr * 0.3, hy - hr * 0.08, hr * 0.2, 0, TAU);
+      c.fill();
+      glowDot(c, -hr * 0.3, hy - hr * 0.08, hr * 0.09, '#9be85e');
+      glowDot(c, hr * 0.3, hy - hr * 0.08, hr * 0.09, '#9be85e');
+      c.fillStyle = '#120a1c';
+      c.fillRect(-hr * 0.3, hy + hr * 0.3, hr * 0.6, hr * 0.18);
+    },
+  },
 };
 
 export const SPR_R: Record<string, number> = {
   risen: 15, clatter: 13, imp: 12, bat: 10, spitter: 15, goatkin: 16, shieldkin: 17,
   archer: 14, ghoul: 14, wraith: 14, hexer: 15, brute: 26, goblin: 13,
+  cinder: 11, caller: 15, worm: 16, knight: 17, shade: 13, carrier: 18,
+  bloodraven: 24, bonetyrant: 28,
   butcher: 40, andariel: 42, baal: 44, terrorlord: 48,
 };
 
-const RANGED = new Set(['spitter', 'hexer', 'archer']);
-const BOSSES = new Set(['butcher', 'andariel', 'baal', 'terrorlord']);
+const RANGED = new Set(['spitter', 'hexer', 'archer', 'caller']);
+const BOSSES = new Set(['butcher', 'andariel', 'baal', 'terrorlord', 'bloodraven', 'bonetyrant']);
 
 function enemyClips(skin: SkinId): ClipSpec[] {
   const look = ENEMY_LOOKS[skin];
   const paintWith = (poseFn: (f: number, n: number) => Pose, clipName: string): Painter =>
     (c, f, n) => {
       const P = poseFn(f, n);
+      if (look.custom) {
+        look.custom(c, P, f, n);
+        return;
+      }
       const { hy, hr } = demon(c, P, look.feat);
       if (look.face) look.face(c, hy, hr, f, n, P);
       else demonFace(c, hy, hr, look.feat.pal.eye);
@@ -810,7 +916,7 @@ function enemyClips(skin: SkinId): ClipSpec[] {
     ['die', 6, 11, false, paintWith(poseDie, 'die')],
   ];
   if (RANGED.has(skin) || BOSSES.has(skin)) clips.splice(3, 0, ['cast', 5, 11, false, paintWith(poseCast, 'cast')]);
-  if (skin === 'goatkin') clips.splice(3, 0, ['charge', 4, 12, true, paintWith((f, n) => { const p = poseWalk(f, n, true); p.lean = 0.42; p.armA = -1.4; p.armB = -1.1; return p; }, 'charge')]);
+  if (skin === 'goatkin' || skin === 'knight') clips.splice(3, 0, ['charge', 4, 12, true, paintWith((f, n) => { const p = poseWalk(f, n, true); p.lean = 0.42; p.armA = -1.4; p.armB = -1.1; return p; }, 'charge')]);
   return clips;
 }
 
@@ -820,6 +926,7 @@ const CLASS_LOOK: Record<ClassId, { skin: Pal; trim: string; cape: string; eye: 
   barbarian: { skin: { hi: '#e8b088', mid: '#c98a5f', lo: '#6b4426', eye: '#ff6b4d' }, trim: '#8c2f2f', cape: '#a03030', eye: '#ff6b4d' },
   necromancer: { skin: { hi: '#e8e0d0', mid: '#c9bfa8', lo: '#6b6350', eye: '#9be85e' }, trim: '#3d6b28', cape: '#2a4d1e', eye: '#9be85e' },
   sorceress: { skin: { hi: '#f0d0b8', mid: '#d8a888', lo: '#7a4d33', eye: '#7fd4e8' }, trim: '#2a6b8c', cape: '#1e4d6b', eye: '#7fd4e8' },
+  paladin: { skin: { hi: '#f0e0c0', mid: '#d8c090', lo: '#7a6038', eye: '#ffc258' }, trim: '#c9a03d', cape: '#8c6a1e', eye: '#ffc258' },
 };
 
 function heroPainter(cls: ClassId, poseFn: (f: number, n: number) => Pose, clip: string): Painter {
@@ -882,6 +989,30 @@ function heroPainter(cls: ClassId, poseFn: (f: number, n: number) => Pose, clip:
       c.strokeStyle = OUT; c.lineWidth = 2; c.stroke();
       c.fillStyle = '#ffc258';
       c.fillRect(-R * 0.1, R * 0.44, R * 0.2, R * 0.18);
+    } else if (cls === 'paladin') {
+      /* plate torso */
+      sphere(c, 0, -R * 0.05, R * 0.72, '#e8eef6', '#aebfd2', '#5c6b7d', 1.08, P.sq);
+      /* gold tabard */
+      c.fillStyle = '#c9a03d';
+      c.strokeStyle = OUT;
+      c.lineWidth = 2.2;
+      c.beginPath();
+      c.moveTo(-R * 0.28, -R * 0.4);
+      c.lineTo(R * 0.28, -R * 0.4);
+      c.lineTo(R * 0.34, R * 0.72);
+      c.lineTo(0, R * 0.88);
+      c.lineTo(-R * 0.34, R * 0.72);
+      c.closePath();
+      c.fill();
+      c.stroke();
+      /* cross emblem */
+      c.fillStyle = '#fff6dd';
+      c.fillRect(-R * 0.07, -R * 0.24, R * 0.14, R * 0.6);
+      c.fillRect(-R * 0.2, -R * 0.06, R * 0.4, R * 0.14);
+      /* pauldrons */
+      for (const s of [-1, 1]) {
+        sphere(c, s * R * 0.62, -R * 0.36, R * 0.26, '#f4f8fc', '#aebfd2', '#5c6b7d');
+      }
     } else {
       /* robe torso */
       const rc = cls === 'necromancer' ? '#3a4d33' : '#2a5c7d';
@@ -937,6 +1068,30 @@ function heroPainter(cls: ClassId, poseFn: (f: number, n: number) => Pose, clip:
       c.fill(); c.stroke();
       sphere(c, 0, -R * 1.85, R * 0.26, '#e8ffe0', '#9be85e', '#3d6b28');
       glowDot(c, 0, -R * 1.85, R * 0.18, '#9be85e');
+      c.restore();
+    } else if (cls === 'paladin') {
+      /* kite shield on back arm */
+      c.save();
+      c.translate(hand2.x - 2, hand2.y);
+      const sg = c.createLinearGradient(-R * 0.4, 0, R * 0.3, 0);
+      sg.addColorStop(0, '#e8eef6');
+      sg.addColorStop(0.55, '#aebfd2');
+      sg.addColorStop(1, '#5c6b7d');
+      c.fillStyle = sg;
+      c.strokeStyle = OUT;
+      c.lineWidth = 2.2;
+      c.beginPath();
+      c.moveTo(0, -R * 0.55);
+      c.quadraticCurveTo(R * 0.45, -R * 0.45, R * 0.4, 0);
+      c.quadraticCurveTo(R * 0.35, R * 0.5, 0, R * 0.7);
+      c.quadraticCurveTo(-R * 0.35, R * 0.5, -R * 0.4, 0);
+      c.quadraticCurveTo(-R * 0.45, -R * 0.45, 0, -R * 0.55);
+      c.closePath();
+      c.fill();
+      c.stroke();
+      c.fillStyle = '#c9a03d';
+      c.fillRect(-R * 0.06, -R * 0.3, R * 0.12, R * 0.62);
+      c.fillRect(-R * 0.18, -R * 0.1, R * 0.36, R * 0.12);
       c.restore();
     }
     /* front arm */
@@ -996,6 +1151,38 @@ function heroPainter(cls: ClassId, poseFn: (f: number, n: number) => Pose, clip:
       c.fill();
       c.stroke();
       glowDot(c, ox, oy, R * 0.28 + (clip === 'attack' ? swing * 6 : Math.sin(f * 1.3) * 1.5), '#7fd4e8');
+    } else if (cls === 'paladin') {
+      /* war hammer */
+      const hAng = clip === 'attack' ? -2.2 + swing * 3.6 : armAng * 0.5 + 0.5;
+      c.save();
+      c.translate(hand.x, hand.y);
+      c.rotate(hAng);
+      c.fillStyle = '#6b4a2e';
+      c.strokeStyle = OUT;
+      c.lineWidth = 2.4;
+      rrPath(c, -2.8, -R * 0.5, 5.6, R * 1.8, 2.8);
+      c.fill();
+      c.stroke();
+      const hg = c.createLinearGradient(0, -R * 1.2, 0, -R * 0.4);
+      hg.addColorStop(0, '#ffe9b0');
+      hg.addColorStop(0.5, '#ffc258');
+      hg.addColorStop(1, '#c9862a');
+      c.fillStyle = hg;
+      rrPath(c, -R * 0.45, -R * 1.25, R * 0.9, R * 0.72, R * 0.12);
+      c.fill();
+      c.stroke();
+      c.fillStyle = '#fff6dd';
+      c.fillRect(-R * 0.09, -R * 1.15, R * 0.18, R * 0.52);
+      c.fillRect(-R * 0.28, -R * 0.98, R * 0.56, R * 0.16);
+      glowDot(c, 0, -R * 0.88, R * 0.3 + (clip === 'attack' ? swing * 5 : 0), '#ffc258');
+      c.restore();
+      if (clip === 'attack' && t > 0.35 && t < 0.7) {
+        c.strokeStyle = 'rgba(255,240,200,0.75)';
+        c.lineWidth = 3.5;
+        c.beginPath();
+        c.arc(0, -R * 0.2, R * 1.3, -1.4 + swing * 2.6, -0.5 + swing * 2.6);
+        c.stroke();
+      }
     }
     /* head */
     const hy = -R * 0.95 * P.sq;
@@ -1025,6 +1212,36 @@ function heroPainter(cls: ClassId, poseFn: (f: number, n: number) => Pose, clip:
       c.fillRect(-hr * 0.9, hy - hr * 0.32, hr * 1.8, hr * 0.24);
       glowDot(c, -hr * 0.3, hy + hr * 0.05, hr * 0.11, L.eye);
       glowDot(c, hr * 0.3, hy + hr * 0.05, hr * 0.11, L.eye);
+    } else if (cls === 'paladin') {
+      sphere(c, 0, hy, hr, L.skin.hi, L.skin.mid, L.skin.lo);
+      /* great helm */
+      const hmg = c.createLinearGradient(-hr, 0, hr, 0);
+      hmg.addColorStop(0, '#f4f8fc');
+      hmg.addColorStop(0.5, '#aebfd2');
+      hmg.addColorStop(1, '#6b7d92');
+      c.fillStyle = hmg;
+      c.strokeStyle = OUT;
+      c.lineWidth = 2.4;
+      c.beginPath();
+      c.arc(0, hy, hr * 1.12, Math.PI * 0.95, Math.PI * 2.05);
+      c.lineTo(hr * 1.0, hy + hr * 0.75);
+      c.lineTo(-hr * 1.0, hy + hr * 0.75);
+      c.closePath();
+      c.fill();
+      c.stroke();
+      /* visor slit + plume */
+      c.fillStyle = '#1c1428';
+      c.fillRect(-hr * 0.55, hy - hr * 0.05, hr * 1.1, hr * 0.2);
+      c.fillStyle = '#c9a03d';
+      c.beginPath();
+      c.moveTo(0, hy - hr * 1.1);
+      c.quadraticCurveTo(hr * 0.5, hy - hr * 1.9, -hr * 0.15, hy - hr * 2.15);
+      c.quadraticCurveTo(hr * 0.1, hy - hr * 1.5, -hr * 0.3, hy - hr * 1.05);
+      c.closePath();
+      c.fill();
+      c.stroke();
+      glowDot(c, -hr * 0.28, hy + hr * 0.05, hr * 0.1, L.eye);
+      glowDot(c, hr * 0.28, hy + hr * 0.05, hr * 0.1, L.eye);
     } else {
       /* hood */
       const hc = cls === 'necromancer' ? '#2f4029' : '#1e4d6b';

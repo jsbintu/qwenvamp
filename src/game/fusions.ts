@@ -26,18 +26,22 @@ export interface FusionDef {
 const W_PREFIX: Record<WeaponId, string> = {
   hellfire: 'Cinder', bonespear: 'Bone', aura: 'Halo', lightning: 'Storm',
   blades: 'Blade', caltrops: 'Spike', whirlwind: 'Gore', scythe: 'Grim',
+  throwaxe: 'Fang', corpses: 'Grave', frostnova: 'Rime', hammer: 'Heaven',
 };
 const W_SUFFIX: Record<WeaponId, string> = {
   hellfire: 'Pyre', bonespear: 'Barrage', aura: 'Verdict', lightning: 'Tempest',
   blades: 'Whirl', caltrops: 'Field', whirlwind: 'Vortex', scythe: 'Reaping',
+  throwaxe: 'Fangs', corpses: 'Detonation', frostnova: 'Zero', hammer: 'Fall',
 };
 const P_PREFIX: Record<PassiveId, string> = {
   vitality: 'Blood', boots: 'Wind', greed: 'Midas', might: 'War', tome: 'Arcane',
   hourglass: 'Time', whetstone: 'Keen', armor: 'Iron', phoenix: 'Ember',
+  wrath: 'Rage', harvest: 'Reaper', archon: 'Storm', conviction: 'Oath',
 };
 const P_SUFFIX: Record<PassiveId, string> = {
   vitality: 'Pact', boots: 'Stride', greed: 'Hoarde', might: 'Fury', tome: 'Grimoire',
   hourglass: 'Chrono', whetstone: 'Edge', armor: 'Bulwark', phoenix: 'Dawn',
+  wrath: 'Fury', harvest: 'Tithe', archon: 'Eye', conviction: 'Vow',
 };
 
 /* ------------------------- weapon-intrinsic modifiers --------------------- */
@@ -51,6 +55,10 @@ const W_MOD: Record<WeaponId, { mod: FusionMod; verb: string }> = {
   caltrops: { mod: 'spikes', verb: 'hits erupt spike clusters' },
   whirlwind: { mod: 'pull', verb: 'dragging foes into its teeth' },
   scythe: { mod: 'critplus', verb: 'devastating critical reaps' },
+  throwaxe: { mod: 'crush', verb: 'axes cleave with crushing force' },
+  corpses: { mod: 'explode', verb: 'every blast sets off chain reactions' },
+  frostnova: { mod: 'ring', verb: 'a frost ring hunts the horde' },
+  hammer: { mod: 'crush', verb: 'impacts flatten the horde' },
 };
 
 const P_MOD: Record<PassiveId, { mod: FusionMod; verb: string }> = {
@@ -63,6 +71,10 @@ const P_MOD: Record<PassiveId, { mod: FusionMod; verb: string }> = {
   whetstone: { mod: 'vorpal', verb: 'pierces everything' },
   armor: { mod: 'ward', verb: 'wards of thorns pulse outward' },
   phoenix: { mod: 'inferno', verb: 'all is set ablaze' },
+  wrath: { mod: 'crush', verb: 'blows land with brutal force' },
+  harvest: { mod: 'lifesteal', verb: 'death feeds you' },
+  archon: { mod: 'split', verb: 'spells splinter apart' },
+  conviction: { mod: 'ward', verb: 'holy wards strike back' },
 };
 
 /* --------------------------- relic fusion procs --------------------------- */
@@ -118,6 +130,23 @@ const FLAGSHIPS: Record<string, { name: string; desc: string; mods: FusionMod[] 
   'scythe+hourglass': {
     name: 'Reaper’s Cyclone', mods: ['critplus', 'echo', 'reaper'],
     desc: 'Twin scythes orbit forever while every sweep echoes through time.',
+  },
+  /* ----------------------- class signature evolutions ---------------------- */
+  'corpses+harvest': {
+    name: 'Garden of Bones', mods: ['explode', 'lifesteal', 'spikes'],
+    desc: 'Every death feeds the next detonation — the whole graveyard fights for you.',
+  },
+  'hammer+conviction': {
+    name: 'Heaven’s Wrath', mods: ['crush', 'ward', 'judgment'],
+    desc: 'The hammer falls with the weight of judgment. Nothing profane survives it.',
+  },
+  'frostnova+archon': {
+    name: 'Glacial Singularity', mods: ['ring', 'pull', 'tempest'],
+    desc: 'The cold bends inward, dragging demons into the frozen heart of the storm.',
+  },
+  'throwaxe+wrath': {
+    name: 'Ragnarok Fangs', mods: ['orbitals', 'swift', 'cyclone'],
+    desc: 'The axes hunger — they orbit, they return, and they never stop.',
   },
 };
 

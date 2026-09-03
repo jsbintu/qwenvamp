@@ -6,7 +6,11 @@ export type WeaponId =
   | 'blades'
   | 'caltrops'
   | 'whirlwind'
-  | 'scythe';
+  | 'scythe'
+  | 'throwaxe'
+  | 'corpses'
+  | 'frostnova'
+  | 'hammer';
 
 export type PassiveId =
   | 'vitality'
@@ -17,9 +21,13 @@ export type PassiveId =
   | 'hourglass'
   | 'whetstone'
   | 'armor'
-  | 'phoenix';
+  | 'phoenix'
+  | 'wrath'
+  | 'harvest'
+  | 'archon'
+  | 'conviction';
 
-export type ClassId = 'barbarian' | 'necromancer' | 'sorceress';
+export type ClassId = 'barbarian' | 'necromancer' | 'sorceress' | 'paladin';
 
 export type SkinId =
   | 'risen'
@@ -35,6 +43,14 @@ export type SkinId =
   | 'ghoul'
   | 'bat'
   | 'goblin'
+  | 'cinder'
+  | 'caller'
+  | 'worm'
+  | 'knight'
+  | 'shade'
+  | 'carrier'
+  | 'bloodraven'
+  | 'bonetyrant'
   | 'butcher'
   | 'andariel'
   | 'baal'
@@ -51,6 +67,10 @@ export const WEAPON_IDS: WeaponId[] = [
   'caltrops',
   'whirlwind',
   'scythe',
+  'throwaxe',
+  'corpses',
+  'frostnova',
+  'hammer',
 ];
 
 export const PASSIVE_IDS: PassiveId[] = [
@@ -63,6 +83,10 @@ export const PASSIVE_IDS: PassiveId[] = [
   'whetstone',
   'armor',
   'phoenix',
+  'wrath',
+  'harvest',
+  'archon',
+  'conviction',
 ];
 
 export function isWeapon(id: CompId): id is WeaponId {
@@ -107,6 +131,8 @@ export interface SnapshotWeapon {
   fused: boolean;
   fusedName?: string;
   fusedWith?: CompId;
+  cd: number;
+  cdMax: number;
 }
 
 export interface SnapshotPassive {
