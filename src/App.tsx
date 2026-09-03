@@ -24,8 +24,10 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<GloomfallEngine | null>(null);
   const classRef = useRef<ClassId>('barbarian');
-  const activeRef = useRef(false);
-  const startingRef = useRef(false);
+  /* The engine must live for the whole run. We track which runId it belongs to so
+     overlay changes (level-up / chest / pause) never destroy & recreate it — that
+     was the "game resets after an upgrade" bug. */
+  const engineRunId = useRef(-1);
 
   const [ov, setOv] = useState<Ov>('menu');
   const [progress, setProgress] = useState(0);
@@ -38,6 +40,7 @@ export default function App() {
   const [muted, setMutedState] = useState(false);
   const [runId, setRunId] = useState(0);
   const [fatal, setFatal] = useState<string | null>(null);
+  const startingRef = useRef(false);
 
   /* surface any runtime error instead of a silent black screen */
   useEffect(() => {
@@ -51,7 +54,6 @@ export default function App() {
     };
   }, []);
 
-  /* auto-clear transient overlays */
   useEffect(() => {
     if (!banner) return;
     const t = setTimeout(() => setBanner(null), 3000);
@@ -63,52 +65,79 @@ export default function App() {
     return () => clearTimeout(t);
   }, [fusion]);
 
-  const killEngine = useCallback(() => {
-    engineRef.current?.destroy();
-    engineRef.current = null;
-  }, []);
+  /* ------------------------------ run lifecycle ----------------------------- */
 
   const startRun = useCallback(async (cls: ClassId) => {
     if (startingRef.current) return;
     startingRef.current = true;
     classRef.current = cls;
-    activeRef.current = true;
     setOv('loading');
     setProgress(0);
     setEnd(null);
     try {
       await bakeAll((p) => setProgress(p));
-    } finally {
+    } catch (err) {
+      setFatal(`Sprite forge failed: ${String(err)}`);
+      setOv('menu');
       startingRef.current = false;
+      return;
     }
-    killEngine();
-    startMusic();
+    startingRef.current = false;
     setRunId((r) => r + 1);
     setOv('none');
-  }, [killEngine]);
+    startMusic();
+  }, []);
 
-  /* spawn engine ONLY when a new run starts — never when overlays open/close */
+  /* Create the engine exactly once per run. Deliberately NOT keyed on `ov`, so
+     opening/closing overlays never tears the game down. */
   useEffect(() => {
-    if (!activeRef.current || !canvasRef.current || ov !== 'none') return;
+    if (runId === 0) return;
+    if (engineRunId.current === runId) return; // already built for this run
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    engineRunId.current = runId;
+
     const cb: Callbacks = {
       onSnapshot: (s) => setSnap(s),
-      onEnd: (s) => { setEnd(s); setOv('end'); },
+      onEnd: (s) => { setEnd(s); setOv('end'); stopMusic(); },
       onLevelUp: (c) => { setChoices(c); setOv('levelup'); },
       onChest: (r) => { setRewards(r); setOv('chest'); },
       onEvolve: (name, desc, flagship) => setFusion({ name, desc, flagship, id: Date.now() }),
       onBanner: (text, sub) => setBanner({ text, sub, id: Date.now() }),
       onError: (m) => setFatal((f) => f ?? m),
     };
-    const engine = new GloomfallEngine(canvasRef.current, cb, classRef.current);
+    const engine = new GloomfallEngine(canvas, cb, classRef.current);
     engine.setMutedState(muted);
     engineRef.current = engine;
     setSnap(DEFAULT_SNAP);
+
     return () => {
       engine.destroy();
-      if (engineRef.current === engine) engineRef.current = null;
+      engineRef.current = null;
+      engineRunId.current = -1;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
+
+  /* stop music when leaving to menu */
+  useEffect(() => {
+    if (ov === 'menu') stopMusic();
+  }, [ov]);
+
+  /* Tear the engine down whenever the game is no longer on screen (menu / end).
+     Runs only on transitions out of the game — never during level-up / chest /
+     pause, so the run state is preserved across those overlays. */
+  const inGameNow = ov !== 'menu' && ov !== 'loading' && ov !== 'end';
+  useEffect(() => {
+    if (inGameNow) return;
+    if (engineRef.current) {
+      engineRef.current.destroy();
+      engineRef.current = null;
+      engineRunId.current = -1;
+    }
+  }, [inGameNow]);
+
+  /* ------------------------------ interactions ------------------------------ */
 
   const pick = useCallback((c: Choice) => {
     const more = engineRef.current?.choose(c);
@@ -133,19 +162,11 @@ export default function App() {
     setOv('none');
   }, []);
   const quit = useCallback(() => {
-    activeRef.current = false;
+    engineRef.current?.setPaused(false);
     stopMusic();
-    killEngine();
     setOv('menu');
     setEnd(null);
-  }, [killEngine]);
-  const toMenu = useCallback(() => {
-    activeRef.current = false;
-    stopMusic();
-    killEngine();
-    setOv('menu');
-    setEnd(null);
-  }, [killEngine]);
+  }, []);
   const toggleMute = useCallback(() => {
     setMutedState((m) => {
       const next = !m;
@@ -155,7 +176,6 @@ export default function App() {
     });
   }, []);
 
-  /* hotkeys */
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -185,7 +205,7 @@ export default function App() {
       {ov === 'chest' && <ChestScreen rewards={rewards} onClaim={claim} />}
       {ov === 'pause' && <PauseScreen onResume={resume} onQuit={quit} muted={muted} onMute={toggleMute} />}
       {ov === 'end' && end && (
-        <EndScreen stats={end} onRetry={() => startRun(classRef.current)} onMenu={toMenu} />
+        <EndScreen stats={end} onRetry={() => startRun(classRef.current)} onMenu={() => { setOv('menu'); setEnd(null); }} />
       )}
 
       {banner && inGame && <BossBanner key={banner.id} text={banner.text} sub={banner.sub} />}
@@ -196,7 +216,7 @@ export default function App() {
           <div className="gothic-frame pixel-corners bg-panel p-6 max-w-lg w-full">
             <h2 className="font-display text-3xl text-blood leading-none mb-2">A Hex Has Been Cast</h2>
             <p className="text-parch text-sm font-bold mb-3">
-              The game hit a runtime error. It has been contained — you can dismiss this and keep playing, or reload.
+              The game hit a runtime error. It has been contained — dismiss to keep playing, or reload.
             </p>
             <pre className="pixel-corners bg-ink border-2 border-line p-3 text-[11px] text-frost whitespace-pre-wrap break-all font-bold mb-4 max-h-40 overflow-auto">
               {fatal}

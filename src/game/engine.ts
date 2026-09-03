@@ -194,7 +194,11 @@ export class GloomfallEngine {
     this.raf = requestAnimationFrame(this.loop);
   }
 
+  private destroyed = false;
+
   destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
     cancelAnimationFrame(this.raf);
     window.removeEventListener('resize', this.resize);
     window.removeEventListener('keydown', this.kd);
@@ -2398,6 +2402,7 @@ export class GloomfallEngine {
   private errCount = 0;
 
   private loop = (now: number) => {
+    if (this.destroyed) return;
     this.raf = requestAnimationFrame(this.loop);
     let raw = (now - this.last) / 1000;
     this.last = now;
