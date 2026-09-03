@@ -48,12 +48,20 @@ export default function App() {
     return () => clearTimeout(t);
   }, [fusion]);
 
+  const startingRef = useRef(false);
   const startRun = useCallback(async (cls: ClassId) => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     classRef.current = cls;
     setOv('loading');
     setProgress(0);
-    await bakeAll((p) => setProgress(p));
+    try {
+      await bakeAll((p) => setProgress(p));
+    } finally {
+      startingRef.current = false;
+    }
     setRunId((r) => r + 1);
+    setOv('none');
   }, []);
 
   /* spawn engine after loading */
