@@ -1,39 +1,29 @@
-import { useMemo, useState } from 'react';
-import type { ChestReward, Choice, ClassId, EndStats } from '../game/types';
-import { isWeapon } from '../game/types';
-import { BOSSES, CLASSES, MAX_RANK, PASSIVES, WEAPONS, fmtTime } from '../game/data';
-import { resolveFusion, procInfo } from '../game/fusions';
-import { ClassIcon, CompIcon, FusionSigil, UiIcon } from './icons';
+import { useEffect, useState } from 'react';
+import type { BossSnap, ChestReward, Choice, ClassId, EndStats, Snapshot } from '../game/types';
+import { CLASSES, PASSIVES, WEAPONS, fmtTime } from '../game/data';
+import { resolveFusion } from '../game/fusions';
+import { CompIcon, ClassIcon, FusionSigil, UiIcon } from './icons';
 import { sfx } from '../game/audio';
 
-const ROMAN = ['I', 'II', 'III', 'IV', 'V'];
+/* ------------------------------ shared bits ------------------------------- */
 
-function Embers({ n = 22 }: { n?: number }) {
-  const embers = useMemo(
-    () =>
-      Array.from({ length: n }).map((_, i) => ({
-        left: Math.random() * 100,
-        delay: Math.random() * 7,
-        dur: 5 + Math.random() * 5,
-        size: 2 + Math.random() * 4,
-        color: ['#ff8a3d', '#ffc258', '#c07bff', '#e6404f'][i % 4],
-      })),
-    [n],
-  );
+export function EmberField({ n = 26 }: { n?: number }) {
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
-      {embers.map((e, i) => (
+      {Array.from({ length: n }).map((_, i) => (
         <div
           key={i}
-          className="absolute bottom-[-10px] rounded-full animate-ember"
+          className="absolute rounded-full animate-ember"
           style={{
-            left: `${e.left}%`,
-            width: e.size,
-            height: e.size,
-            background: e.color,
-            boxShadow: `0 0 ${e.size * 2.5}px ${e.color}`,
-            animationDelay: `${e.delay}s`,
-            animationDuration: `${e.dur}s`,
+            left: `${(i * 137) % 100}%`,
+            bottom: '-3vh',
+            width: 2 + (i % 4),
+            height: 2 + (i % 4),
+            background: i % 3 === 0 ? '#c07bff' : i % 3 === 1 ? '#ffc258' : '#ff8a3d',
+            boxShadow: `0 0 ${6 + (i % 5) * 2}px currentColor`,
+            animationDelay: `${(i * 0.53) % 7}s`,
+            animationDuration: `${6 + (i % 5)}s`,
+            opacity: 0,
           }}
         />
       ))}
@@ -41,121 +31,87 @@ function Embers({ n = 22 }: { n?: number }) {
   );
 }
 
-function GothicButton({ children, onClick, color = '#ff8a3d', big = false }: {
+function GothicButton({ children, onClick, primary = false, className = '' }: {
   children: React.ReactNode;
   onClick: () => void;
-  color?: string;
-  big?: boolean;
+  primary?: boolean;
+  className?: string;
 }) {
   return (
     <button
-      onClick={onClick}
-      className={`pixel-corners relative font-display font-bold tracking-wider text-ink transition-transform duration-100 hover:scale-[1.04] active:scale-95 cursor-pointer ${
-        big ? 'px-10 py-3 text-2xl' : 'px-6 py-2 text-lg'
-      }`}
-      style={{
-        background: `linear-gradient(180deg, ${color} 0%, ${color} 55%, rgba(0,0,0,0.25) 130%), ${color}`,
-        boxShadow: `0 0 0 2px #120a1c, 0 0 0 4px ${color}66, 0 8px 24px rgba(0,0,0,0.5), 0 0 26px ${color}44`,
-      }}
+      onClick={() => { sfx.click(); onClick(); }}
+      className={`pixel-corners font-display tracking-widest text-lg px-7 py-2.5 border-2 transition-all duration-150 cursor-pointer
+        hover:-translate-y-0.5 active:translate-y-0.5 active:scale-95 ${
+        primary
+          ? 'bg-gradient-to-b from-[#ffc258] to-[#d8842e] border-[#7a4a12] text-[#2a1204] hover:shadow-[0_0_26px_rgba(255,194,88,0.55)]'
+          : 'bg-panel border-line text-parch hover:text-ember hover:border-ember'
+      } ${className}`}
     >
       {children}
     </button>
   );
 }
 
-/* ------------------------------- start screen ------------------------------ */
+/* --------------------------------- start ---------------------------------- */
 
-export function StartScreen({ onStart }: { onStart: (c: ClassId) => void }) {
+export function StartScreen({ onStart }: { onStart: (cls: ClassId) => void }) {
   const [sel, setSel] = useState<ClassId>('barbarian');
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[radial-gradient(ellipse_at_50%_35%,#2f1b46_0%,#1a0f28_55%,#0d0716_100%)] no-select overflow-hidden">
-      <Embers />
-      <div className="relative z-10 flex flex-col items-center gap-6 px-4 w-full max-w-5xl animate-fadein">
-        <div className="text-center">
-          <div className="font-display text-parch/70 tracking-[0.5em] text-sm mb-1">SURVIVORS OF SANCTUARY</div>
-          <h1
-            className="font-display font-black text-[clamp(56px,11vw,110px)] leading-[0.9] text-outline"
-            style={{ color: '#ff8a3d', textShadow: '0 0 40px rgba(255,138,61,0.5), 0 4px 0 #120a1c, 0 8px 24px rgba(0,0,0,0.9)' }}
-          >
-            GLOOMFALL
+    <div className="absolute inset-0 z-30 bg-ink overflow-hidden no-select">
+      {/* layered backdrop */}
+      <div className="absolute inset-0" style={{ background: 'radial-gradient(1200px 700px at 50% 118%, #4d1220 0%, #2a1038 45%, #120a1c 100%)' }} />
+      <div className="absolute inset-0 opacity-40" style={{ background: 'radial-gradient(700px 400px at 18% 10%, rgba(192,123,255,0.14), transparent 70%), radial-gradient(700px 400px at 84% 18%, rgba(255,138,61,0.12), transparent 70%)' }} />
+      <EmberField n={34} />
+
+      <div className="relative h-full flex flex-col items-center justify-center gap-5 px-4 overflow-y-auto py-6">
+        <div className="text-center animate-cardin">
+          <div className="flex items-center justify-center gap-3 text-parch/70 font-black tracking-[0.5em] text-xs mb-1">
+            <span className="h-px w-14 bg-line" /> SURVIVORS OF SANCTUARY <span className="h-px w-14 bg-line" />
+          </div>
+          <h1 className="font-display font-black text-[clamp(3.4rem,9vw,6.5rem)] leading-[0.9] text-bone text-outline animate-flicker">
+            GLOOM<span className="text-blood">FALL</span>
           </h1>
-          <p className="font-body text-parch font-bold mt-2 max-w-xl mx-auto">
-            The gates of the Burning Hells have burst. Survive <span className="text-ember">10 minutes</span>, forge{' '}
-            <span className="text-arcane">evolutions</span>, and slay the <span className="text-blood">Prime Evils</span>.
+          <p className="text-parch/80 font-bold text-sm mt-2 max-w-md mx-auto">
+            The Prime Evils pour from the rift. Stand for ten minutes — or mount Diablo's skull on a spike.
           </p>
         </div>
 
         {/* class select */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full">
-          {(Object.keys(CLASSES) as ClassId[]).map((id) => {
-            const c = CLASSES[id];
-            const active = sel === id;
-            return (
-              <button
-                key={id}
-                onClick={() => {
-                  setSel(id);
-                  sfx.click();
-                }}
-                className={`pixel-corners gothic-frame text-left p-4 transition-all duration-150 cursor-pointer bg-panel/90 hover:bg-panel2 ${
-                  active ? 'scale-[1.03] -translate-y-1' : 'opacity-75 hover:opacity-100'
-                }`}
-                style={active ? { borderColor: c.color, boxShadow: `0 0 0 2px #120a1c, 0 0 0 4px ${c.color}88, 0 0 30px ${c.color}44` } : undefined}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={active ? 'animate-bob' : ''}>
-                    <ClassIcon id={id} size={44} />
-                  </div>
-                  <div>
-                    <div className="font-display font-bold text-xl leading-none" style={{ color: c.color }}>
-                      {c.name}
-                    </div>
-                    <div className="text-[11px] font-black tracking-widest text-parch/70 uppercase">{c.title}</div>
-                  </div>
+        <div className="grid grid-cols-3 gap-3 w-full max-w-3xl animate-cardin" style={{ animationDelay: '0.1s' }}>
+          {Object.values(CLASSES).map((c) => (
+            <button
+              key={c.id}
+              onClick={() => { sfx.click(); setSel(c.id); }}
+              className={`gothic-frame pixel-corners bg-panel/90 p-4 text-left transition-all duration-150 cursor-pointer hover:-translate-y-1 group ${
+                sel === c.id ? 'outline outline-2 outline-ember shadow-[0_0_30px_rgba(255,194,88,0.25)]' : 'opacity-80 hover:opacity-100'
+              }`}
+            >
+              <div className="flex items-center gap-3 mb-2">
+                <div className={`w-12 h-12 pixel-corners border-2 flex items-center justify-center bg-ink shrink-0 ${sel === c.id ? 'border-ember' : 'border-line'} group-hover:animate-bob`}>
+                  <ClassIcon id={c.id} size={30} />
                 </div>
-                <p className="text-[12px] text-parch/85 font-semibold mt-2 leading-snug">{c.desc}</p>
-                <div className="mt-2 text-[11px] font-black text-ember tracking-wide">{c.bonus}</div>
-                <div className="mt-1.5 flex items-center gap-1.5 text-[11px] font-bold text-parch/70">
-                  <CompIcon id={c.startWeapon} size={15} /> starts with {WEAPONS[c.startWeapon].name}
+                <div>
+                  <div className="font-display font-bold text-xl leading-none" style={{ color: c.color }}>{c.name}</div>
+                  <div className="text-[10px] font-black tracking-wider text-parch/60 uppercase">{c.title}</div>
                 </div>
-              </button>
-            );
-          })}
+              </div>
+              <p className="text-[12px] text-parch/85 leading-snug min-h-[42px]">{c.desc}</p>
+              <div className="mt-2 text-[11px] font-black text-ember">{c.bonus}</div>
+              <div className="mt-1 flex items-center gap-1.5 text-[11px] text-parch/70 font-bold">
+                Starts with <span style={{ color: WEAPONS[c.startWeapon].color }}>{WEAPONS[c.startWeapon].name}</span>
+              </div>
+            </button>
+          ))}
         </div>
 
-        <div className="flex items-center gap-4">
-          <GothicButton big onClick={() => onStart(sel)}>
-            DESCEND INTO THE GLOOM
+        <div className="flex flex-col items-center gap-3 animate-cardin" style={{ animationDelay: '0.2s' }}>
+          <GothicButton primary onClick={() => onStart(sel)} className="text-2xl px-12 py-3">
+            DESCEND INTO TRISTRAM
           </GothicButton>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full text-[12px] font-bold text-parch/80">
-          <div className="pixel-corners bg-panel/70 border-2 border-line p-3 flex items-start gap-2.5">
-            <FusionSigil size={26} className="shrink-0 mt-0.5" />
-            <span>
-              <span className="text-ember font-black">EVOLUTIONS —</span> rank any two abilities or relics to V, then open a
-              chest to fuse them into one of <span className="text-arcane">120 unique powers</span>.
-            </span>
-          </div>
-          <div className="pixel-corners bg-panel/70 border-2 border-line p-3 flex items-start gap-2.5">
-            <UiIcon name="skull" size={24} className="shrink-0 text-blood mt-0.5" />
-            <span>
-              <span className="text-blood font-black">PRIME EVILS —</span>
-              {BOSSES.map((b, i) => (
-                <span key={b.skin}>
-                  {i > 0 && ' · '}
-                  {b.name} {fmtTime(b.at)}
-                </span>
-              ))}
-              . Slay Diablo — or outlast the night.
-            </span>
-          </div>
-          <div className="pixel-corners bg-panel/70 border-2 border-line p-3 flex items-start gap-2.5">
-            <UiIcon name="keys" size={24} className="shrink-0 text-frost mt-0.5" />
-            <span>
-              <span className="text-frost font-black">CONTROLS —</span> WASD / arrows to move. Weapons fire on their own.
-              1·2·3 pick upgrades. ESC pauses. M mutes.
-            </span>
+          <div className="flex gap-4 text-[11px] font-bold text-parch/60">
+            <span className="flex items-center gap-1.5"><UiIcon name="keys" size={13} /> WASD / arrows to move</span>
+            <span className="flex items-center gap-1.5"><UiIcon name="flame" size={13} /> weapons fire on their own</span>
+            <span className="flex items-center gap-1.5"><UiIcon name="chest" size={13} /> rank both parts to V → fuse</span>
           </div>
         </div>
       </div>
@@ -163,61 +119,106 @@ export function StartScreen({ onStart }: { onStart: (c: ClassId) => void }) {
   );
 }
 
-/* ------------------------------- level up ---------------------------------- */
+/* -------------------------------- loading --------------------------------- */
 
-export function LevelUpModal({ choices, onPick, level }: { choices: Choice[]; onPick: (c: Choice) => void; level: number }) {
+const TIPS = [
+  'Rank a weapon and a passive to V, then open any chest to fuse them.',
+  'Grave Shieldbearers block frontal shots — arc around their shield.',
+  'Every fusion is unique: 8 weapons × 9 relics × each other.',
+  'Treasure Goblins flee. Catch one for a chest and a pile of gold.',
+  'Gorvash charges at 2:30. Andariel at 5:00. Baal at 7:30. Diablo at 9:10.',
+  'Slows stack on demons; Windrunner Boots Rank III makes you immune.',
+  'The Phoenix Feather is one rank, one life, one glorious fireball.',
+];
+
+export function LoadingScreen({ progress }: { progress: number }) {
+  const [tip, setTip] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => setTip((t) => (t + 1) % TIPS.length), 2600);
+    return () => clearInterval(iv);
+  }, []);
+  const pct = Math.round(progress * 100);
   return (
-    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-ink/70 backdrop-blur-[2px] no-select animate-fadein">
-      <div className="font-display text-ember text-3xl font-bold tracking-[0.25em] text-outline animate-cardin">
-        LEVEL {level}
+    <div className="absolute inset-0 z-40 bg-ink flex flex-col items-center justify-center gap-6 no-select">
+      <div className="absolute inset-0" style={{ background: 'radial-gradient(900px 500px at 50% 110%, #3d1230 0%, #120a1c 70%)' }} />
+      <EmberField n={20} />
+      <div className="relative flex flex-col items-center gap-5 px-6 w-full max-w-lg">
+        <div className="flex items-center gap-3 animate-swing origin-top">
+          <UiIcon name="flame" size={34} className="text-ember animate-glowpulse" />
+          <span className="font-display font-black text-4xl text-bone text-outline">THE FORGE AWAKENS</span>
+        </div>
+        <div className="w-full">
+          <div className="h-[18px] pixel-corners bg-[#120a1c] border-2 border-line overflow-hidden relative">
+            <div
+              className="h-full transition-[width] duration-200 relative overflow-hidden"
+              style={{ width: `${pct}%`, background: 'linear-gradient(90deg,#7d3a12,#ff8a3d 55%,#ffc258)' }}
+            >
+              <div className="absolute inset-0 animate-shimmer" style={{ background: 'linear-gradient(90deg,transparent,rgba(255,255,255,0.4),transparent)', backgroundSize: '200% 100%' }} />
+            </div>
+          </div>
+          <div className="flex justify-between mt-1.5 text-[11px] font-black text-parch/70 tracking-wider">
+            <span>PAINTING SPRITE ATLASES…</span>
+            <span className="text-ember">{pct}%</span>
+          </div>
+        </div>
+        <div key={tip} className="animate-fadein text-center text-[13px] text-parch/85 font-bold min-h-[2.4em]">
+          <span className="text-ember font-black">TIP · </span>
+          {TIPS[tip]}
+        </div>
       </div>
-      <div className="font-display text-bone text-xl mb-5 text-outline tracking-widest">CHOOSE YOUR DARK BOON</div>
-      <div className="flex flex-col sm:flex-row gap-4 px-4">
+    </div>
+  );
+}
+
+/* -------------------------------- level up -------------------------------- */
+
+export function LevelUpScreen({ choices, onPick, pending }: {
+  choices: Choice[];
+  onPick: (c: Choice) => void;
+  pending: number;
+}) {
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      const i = ['1', '2', '3'].indexOf(e.key);
+      if (i >= 0 && choices[i]) onPick(choices[i]);
+    };
+    window.addEventListener('keydown', h);
+    return () => window.removeEventListener('keydown', h);
+  }, [choices, onPick]);
+
+  return (
+    <div className="absolute inset-0 z-30 bg-[#120a1c]/78 backdrop-blur-[2px] flex flex-col items-center justify-center gap-6 no-select animate-fadein px-4">
+      <div className="text-center">
+        <div className="font-display font-black text-5xl text-ember text-outline animate-popin">LEVEL UP</div>
+        <div className="text-parch/70 font-black tracking-[0.3em] text-xs mt-1">CHOOSE YOUR DARK BOON{pending > 0 ? ` · ${pending + 1} MORE AFTER THIS` : ''}</div>
+      </div>
+      <div className="flex gap-4 flex-wrap justify-center">
         {choices.map((c, i) => {
-          const def = isWeapon(c.id) ? WEAPONS[c.id] : PASSIVES[c.id];
-          const curLvl = c.isNew ? 0 : c.level - 1;
-          const maxLvl = isWeapon(c.id) ? MAX_RANK : PASSIVES[c.id].ranks.length;
+          const isW = c.kind === 'weapon';
+          const name = isW ? WEAPONS[c.id as keyof typeof WEAPONS].name : PASSIVES[c.id as keyof typeof PASSIVES].name;
+          const color = isW ? WEAPONS[c.id as keyof typeof WEAPONS].color : PASSIVES[c.id as keyof typeof PASSIVES].color;
           return (
             <button
               key={`${c.id}${i}`}
-              onClick={() => onPick(c)}
-              className="pixel-corners gothic-frame w-[250px] bg-panel/95 p-4 text-left transition-all duration-150 hover:-translate-y-2 hover:bg-panel2 cursor-pointer animate-cardin group"
-              style={{ animationDelay: `${i * 0.07}s`, borderColor: def.color + '99' }}
+              onClick={() => { sfx.click(); onPick(c); }}
+              className="gothic-frame pixel-corners w-[240px] bg-panel/95 p-5 text-left cursor-pointer transition-all duration-150 hover:-translate-y-1.5 hover:shadow-[0_10px_40px_rgba(0,0,0,0.6)] group animate-cardin"
+              style={{ animationDelay: `${i * 0.07}s` }}
             >
-              <div className="flex items-center justify-between">
-                <span
-                  className="text-[10px] font-black tracking-[0.2em] pixel-corners px-2 py-0.5"
-                  style={{ background: c.isNew ? def.color : '#3a2354', color: c.isNew ? '#120a1c' : '#d8c69a' }}
-                >
-                  {c.isNew ? 'NEW' : `RANK ${ROMAN[curLvl - 1] ?? 'I'} → ${ROMAN[c.level - 1]}`}
-                </span>
-                <span className="text-[10px] font-black text-parch/60 tracking-widest">[{i + 1}]</span>
-              </div>
-              <div className="flex items-center gap-3 mt-3">
-                <div className="transition-transform group-hover:scale-110 group-hover:rotate-3">
-                  <CompIcon id={c.id} size={42} />
+              <div className="flex items-center justify-between mb-3">
+                <div className="w-14 h-14 pixel-corners border-2 border-line bg-ink flex items-center justify-center group-hover:border-ember group-hover:animate-bob transition-colors">
+                  <CompIcon id={c.id} size={34} />
                 </div>
-                <div>
-                  <div className="font-display font-bold text-lg leading-tight" style={{ color: def.color }}>
-                    {def.name}
-                  </div>
-                  <div className="text-[10px] font-black tracking-widest text-parch/60 uppercase">
-                    {isWeapon(c.id) ? 'Ability' : 'Relic'}
+                <div className="text-right">
+                  <div className="text-[9px] font-black tracking-widest text-parch/50">{isW ? 'ABILITY' : 'RELIC'}</div>
+                  <div className="font-display font-bold text-2xl leading-none" style={{ color: c.isNew ? color : '#ffc258' }}>
+                    {c.isNew ? 'NEW' : `RANK ${'I II III IV V'.split(' ')[c.level - 1]}`}
                   </div>
                 </div>
               </div>
-              <p className="mt-2.5 text-[13px] font-bold text-bone leading-snug min-h-[38px]">{c.rankText}</p>
-              <div className="mt-2 flex gap-1">
-                {Array.from({ length: maxLvl }).map((_, k) => (
-                  <div
-                    key={k}
-                    className="h-1.5 flex-1 pixel-corners"
-                    style={{
-                      background: k < c.level ? def.color : 'rgba(18,10,28,0.9)',
-                      boxShadow: k < c.level ? `0 0 6px ${def.color}` : 'none',
-                    }}
-                  />
-                ))}
+              <div className="font-display font-bold text-xl leading-tight" style={{ color }}>{name}</div>
+              <div className="text-[12.5px] text-parch/90 leading-snug mt-1.5 min-h-[3.4em]">{c.rankText}</div>
+              <div className="mt-3 flex items-center gap-2 text-[10px] font-black tracking-wider text-parch/45">
+                <span className="pixel-corners border border-line px-1.5 py-0.5">{i + 1}</span> PRESS KEY OR CLICK
               </div>
             </button>
           );
@@ -227,120 +228,97 @@ export function LevelUpModal({ choices, onPick, level }: { choices: Choice[]; on
   );
 }
 
-/* -------------------------------- chest ------------------------------------ */
+/* --------------------------------- chest ---------------------------------- */
 
-export function ChestModal({ rewards, onClaim }: { rewards: ChestReward[]; onClaim: () => void }) {
-  const [opened, setOpened] = useState(false);
-  const fusion = rewards.find((r) => r.kind === 'fusion');
-  const fuseDef = fusion && fusion.id && fusion.pairWith ? resolveFusion(fusion.id, fusion.pairWith) : null;
-
+export function ChestScreen({ rewards, onClaim }: { rewards: ChestReward[]; onClaim: () => void }) {
   return (
-    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-ink/70 backdrop-blur-[2px] no-select animate-fadein">
-      {!opened ? (
-        <>
-          <div className="animate-chestshake mb-6">
-            <svg width={130} height={110} viewBox="0 0 130 110" className="drop-shadow-[0_10px_30px_rgba(255,194,88,0.35)]">
-              <g stroke="#120a1c" strokeWidth={4} strokeLinejoin="round">
-                <rect x={15} y={38} width={100} height={60} fill="#8a5a2b" />
-                <path d="M15 38c0-16 22-26 50-26s50 10 50 26v6H15v-6z" fill="#b07a3d" />
-                <rect x={55} y={48} width={20} height={26} fill="#ffc258" />
-                <circle cx={65} cy={58} r={4} fill="#120a1c" />
-                <rect x={28} y={38} width={8} height={60} fill="#6b4420" />
-                <rect x={94} y={38} width={8} height={60} fill="#6b4420" />
-              </g>
-            </svg>
-          </div>
-          <div className="font-display text-ember text-3xl font-bold text-outline tracking-widest animate-popin">
-            TREASURE OF THE DAMNED
-          </div>
-          {fuseDef && (
-            <div className="mt-1 font-display text-arcane text-lg text-outline animate-popin" style={{ animationDelay: '0.15s' }}>
-              something inside is <span className="text-ember">FUSING</span>...
-            </div>
-          )}
-          <div className="mt-7">
-            <GothicButton
-              big
-              onClick={() => {
-                setOpened(true);
-                sfx.chest();
-              }}
+    <div className="absolute inset-0 z-30 bg-[#120a1c]/78 backdrop-blur-[2px] flex flex-col items-center justify-center gap-6 no-select animate-fadein px-4">
+      <div className="font-display font-black text-5xl text-ember text-outline animate-popin flex items-center gap-4">
+        <UiIcon name="chest" size={44} className="animate-chestshake text-ember" /> HORADRIC CACHE
+      </div>
+      <div className="flex gap-4 flex-wrap justify-center">
+        {rewards.map((r, i) => {
+          let icon: React.ReactNode = null;
+          let title = '';
+          let desc = '';
+          let color = '#ffc258';
+          if (r.kind === 'fusion' && r.id && r.pairWith) {
+            const f = resolveFusion(r.id, r.pairWith);
+            title = f.name;
+            desc = f.desc;
+            color = f.color;
+            icon = <FusionSigil size={40} className="animate-glowpulse" />;
+          } else if (r.kind === 'heal') {
+            title = 'Healing Draught';
+            desc = `Restores ${r.amount} life.`;
+            color = '#e6404f';
+            icon = <UiIcon name="heart" size={38} className="text-blood" />;
+          } else if (r.kind === 'gold') {
+            title = 'Gold';
+            desc = `+${r.amount} gold for your troubles.`;
+            icon = <UiIcon name="coin" size={38} className="text-ember" />;
+          } else if (r.kind === 'weapon' && r.id) {
+            title = `${WEAPONS[r.id as keyof typeof WEAPONS].name} — upranked`;
+            desc = WEAPONS[r.id as keyof typeof WEAPONS].desc;
+            color = WEAPONS[r.id as keyof typeof WEAPONS].color;
+            icon = <CompIcon id={r.id} size={38} />;
+          } else if (r.kind === 'passive' && r.id) {
+            title = `${PASSIVES[r.id as keyof typeof PASSIVES].name} — upranked`;
+            desc = PASSIVES[r.id as keyof typeof PASSIVES].desc;
+            color = PASSIVES[r.id as keyof typeof PASSIVES].color;
+            icon = <CompIcon id={r.id} size={38} />;
+          }
+          return (
+            <div
+              key={i}
+              className="gothic-frame pixel-corners w-[250px] bg-panel/95 p-5 text-center animate-cardin"
+              style={{ animationDelay: `${0.15 + i * 0.14}s` }}
             >
-              PRY IT OPEN
-            </GothicButton>
-          </div>
-        </>
-      ) : (
-        <div className="flex flex-col items-center gap-5 animate-fadein px-4">
-          <div className="font-display text-ember text-3xl font-bold text-outline tracking-widest">SPOILS CLAIMED</div>
-          <div className="flex flex-col sm:flex-row gap-4">
-            {rewards.map((r, i) => {
-              if (r.kind === 'fusion' && fuseDef) {
-                const aDef = isWeapon(fuseDef.a) ? WEAPONS[fuseDef.a] : PASSIVES[fuseDef.a];
-                const bDef = isWeapon(fuseDef.b) ? WEAPONS[fuseDef.b] : PASSIVES[fuseDef.b];
-                return (
-                  <div
-                    key={i}
-                    className="pixel-corners w-[300px] p-5 text-center animate-cardin relative overflow-hidden"
-                    style={{
-                      animationDelay: `${i * 0.1}s`,
-                      background: 'linear-gradient(160deg,#3a2318 0%,#231234 60%,#33203a 100%)',
-                      border: `3px solid ${fuseDef.color}`,
-                      boxShadow: `0 0 0 2px #120a1c, 0 0 40px ${fuseDef.color}66`,
-                    }}
-                  >
-                    <div className="absolute inset-0 animate-fusionflash" style={{ background: `radial-gradient(circle, ${fuseDef.color}55 0%, transparent 70%)` }} />
-                    <div className="text-[10px] font-black tracking-[0.3em] text-ember mb-2">
-                      {fuseDef.flagship ? 'FLAGSHIP EVOLUTION' : 'EVOLUTION FORGED'}
-                    </div>
-                    <div className="flex items-center justify-center gap-2">
-                      <CompIcon id={fuseDef.a} size={34} />
-                      <span className="font-display text-parch text-xl">×</span>
-                      <CompIcon id={fuseDef.b} size={34} />
-                      <span className="font-display text-ember text-2xl">→</span>
-                      <div className="animate-glowpulse">
-                        <CompIcon id={fuseDef.kind === 'weapon' ? (fuseDef.base ?? fuseDef.a) : fuseDef.a} size={40} color={fuseDef.color} />
-                      </div>
-                    </div>
-                    <div className="font-display font-black text-2xl mt-2 leading-tight" style={{ color: fuseDef.color, textShadow: '0 2px 0 #120a1c' }}>
-                      {fuseDef.name}
-                    </div>
-                    <p className="text-[12px] font-bold text-parch mt-1.5 leading-snug">{fuseDef.desc}</p>
-                    <div className="text-[10px] font-black text-parch/60 mt-2 tracking-wide">
-                      {aDef.name} + {bDef.name}
-                    </div>
-                  </div>
-                );
-              }
-              const label =
-                r.kind === 'heal' ? `Healing Rite +${r.amount}` :
-                r.kind === 'gold' ? `${r.amount} Gold` :
-                r.kind === 'weapon' ? `${WEAPONS[r.id as keyof typeof WEAPONS].name} +1 Rank` :
-                r.kind === 'passive' ? `${PASSIVES[r.id as keyof typeof PASSIVES].name} +1 Rank` : '';
-              return (
-                <div
-                  key={i}
-                  className="pixel-corners gothic-frame w-[200px] p-4 text-center bg-panel/95 animate-cardin"
-                  style={{ animationDelay: `${i * 0.1}s` }}
-                >
-                  <div className="flex justify-center text-ember">
-                    <UiIcon name={r.kind === 'heal' ? 'heart' : r.kind === 'gold' ? 'coin' : 'chest'} size={34} />
-                  </div>
-                  <div className="font-display font-bold text-lg mt-2 text-bone">{label}</div>
-                </div>
-              );
-            })}
-          </div>
-          <GothicButton onClick={onClaim} color="#9be85e">
-            CONTINUE THE HUNT
-          </GothicButton>
-        </div>
-      )}
+              <div className="flex justify-center mb-3">{icon}</div>
+              <div className="font-display font-bold text-lg leading-tight" style={{ color }}>{title}</div>
+              <div className="text-[12px] text-parch/85 leading-snug mt-1.5 min-h-[3em]">{desc}</div>
+            </div>
+          );
+        })}
+      </div>
+      <GothicButton primary onClick={onClaim} className="text-xl">CLAIM THE SPOILS</GothicButton>
     </div>
   );
 }
 
-/* --------------------------------- pause ----------------------------------- */
+/* ------------------------------ fusion flash ------------------------------ */
+
+export function FusionFlash({ name, desc, flagship }: { name: string; desc: string; flagship: boolean }) {
+  return (
+    <div className="absolute inset-0 z-40 pointer-events-none flex flex-col items-center justify-center no-select">
+      <div className="absolute inset-0 animate-fusionflash" style={{ background: flagship ? 'radial-gradient(circle, rgba(255,246,221,0.95) 0%, rgba(255,194,88,0.5) 35%, transparent 70%)' : 'radial-gradient(circle, rgba(255,246,221,0.85) 0%, rgba(192,123,255,0.4) 40%, transparent 72%)' }} />
+      <div className="animate-cardin text-center px-6">
+        <div className={`font-black tracking-[0.4em] text-sm ${flagship ? 'text-blood' : 'text-arcane'}`}>
+          {flagship ? '◆ FLAGSHIP EVOLUTION ◆' : '◆ DARK FUSION ◆'}
+        </div>
+        <div className="font-display font-black text-[clamp(2.6rem,7vw,4.6rem)] text-bone text-outline leading-none mt-1 animate-glowpulse">
+          {name.toUpperCase()}
+        </div>
+        <div className="text-parch font-bold text-sm max-w-md mx-auto mt-2 text-outline">{desc}</div>
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------------- banner --------------------------------- */
+
+export function BossBanner({ text, sub }: { text: string; sub?: string }) {
+  return (
+    <div className="absolute inset-x-0 top-[24%] z-20 pointer-events-none flex flex-col items-center no-select">
+      <div className="animate-bannerin text-center">
+        <div className="font-display font-black text-[clamp(2rem,6vw,3.6rem)] text-blood text-outline leading-none tracking-wide">{text}</div>
+        {sub && <div className="font-display text-xl text-parch text-outline mt-1">{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------------- pause ---------------------------------- */
 
 export function PauseScreen({ onResume, onQuit, muted, onMute }: {
   onResume: () => void;
@@ -349,99 +327,95 @@ export function PauseScreen({ onResume, onQuit, muted, onMute }: {
   onMute: () => void;
 }) {
   return (
-    <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-ink/80 backdrop-blur-[3px] no-select animate-fadein">
-      <div className="font-display font-black text-6xl text-outline text-parch tracking-widest">PAUSED</div>
-      <div className="text-parch/70 font-bold text-sm mt-2 mb-8">The hells wait for no one... except now.</div>
-      <div className="flex flex-col gap-3 w-64">
-        <GothicButton onClick={onResume} color="#9be85e">RESUME (ESC)</GothicButton>
-        <GothicButton onClick={onMute} color="#7fd4e8">{muted ? 'UNMUTE (M)' : 'MUTE (M)'}</GothicButton>
-        <GothicButton onClick={onQuit} color="#e6404f">ABANDON RUN</GothicButton>
+    <div className="absolute inset-0 z-30 bg-[#120a1c]/82 backdrop-blur-[3px] flex flex-col items-center justify-center gap-7 no-select animate-fadein px-4">
+      <div className="font-display font-black text-6xl text-bone text-outline">SANCTUARY WAITS</div>
+      <div className="flex gap-3 flex-wrap justify-center">
+        <GothicButton primary onClick={onResume} className="text-xl">RESUME</GothicButton>
+        <GothicButton onClick={onMute}>{muted ? 'UNMUTE' : 'MUTE'}</GothicButton>
+        <GothicButton onClick={onQuit}>ABANDON RUN</GothicButton>
       </div>
-      <div className="mt-8 max-w-md text-center text-[12px] font-bold text-parch/60 leading-relaxed">
-        Rank an ability and a relic to <span className="text-ember">V</span>, then open any chest — the two will fuse into an
-        evolution. Treasure Goblins and elites drop chests.
+      <div className="text-parch/60 text-sm font-bold">ESC to resume · M to mute</div>
+    </div>
+  );
+}
+
+/* ---------------------------------- end ----------------------------------- */
+
+export function EndScreen({ stats, onRetry, onMenu }: { stats: EndStats; onRetry: () => void; onMenu: () => void }) {
+  return (
+    <div className="absolute inset-0 z-30 overflow-hidden no-select">
+      <div className="absolute inset-0" style={{ background: stats.victory ? 'radial-gradient(1000px 600px at 50% 115%, #4d3a12 0%, #241238 50%, #120a1c 100%)' : 'radial-gradient(1000px 600px at 50% 115%, #4d1220 0%, #241238 50%, #120a1c 100%)' }} />
+      <EmberField n={30} />
+      <div className="relative h-full flex flex-col items-center justify-center gap-5 px-4 overflow-y-auto py-6">
+        <div className="text-center animate-cardin">
+          <div className={`font-display font-black text-[clamp(2.8rem,8vw,5.2rem)] leading-none text-outline ${stats.victory ? 'text-ember' : 'text-blood'}`}>
+            {stats.victory ? 'SANCTUARY ENDURES' : 'YOU HAVE FALLEN'}
+          </div>
+          <div className="text-parch/80 font-bold mt-2 text-sm">
+            {stats.victory
+              ? stats.bossKills >= 4
+                ? 'All four Prime Evils lie broken. The angels owe you a drink.'
+                : 'You outlasted the siege until dawn. The horde recedes… for now.'
+              : 'The horde closes over your bones. Sanctuary remembers its heroes.'}
+          </div>
+        </div>
+
+        <div className="gothic-frame pixel-corners bg-panel/92 p-5 w-full max-w-xl animate-cardin" style={{ animationDelay: '0.12s' }}>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-2.5">
+            {stats.stats.map((s) => (
+              <div key={s.label} className="flex items-baseline justify-between border-b border-line/40 pb-1">
+                <span className="text-[12px] font-black tracking-wider text-parch/60 uppercase">{s.label}</span>
+                <span className="font-display font-bold text-xl text-bone">{s.value}</span>
+              </div>
+            ))}
+          </div>
+          {stats.fusions.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[11px] font-black tracking-widest text-ember mb-1.5">EVOLUTIONS FORGED</div>
+              <div className="flex flex-wrap gap-1.5">
+                {stats.fusions.map((f, i) => (
+                  <span key={i} className="pixel-corners bg-ink border border-line px-2 py-0.5 text-[11px] font-bold text-parch flex items-center gap-1">
+                    <FusionSigil size={12} /> {f}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex gap-3 animate-cardin" style={{ animationDelay: '0.2s' }}>
+          <GothicButton primary onClick={onRetry} className="text-xl">DESCEND AGAIN</GothicButton>
+          <GothicButton onClick={onMenu}>RETURN TO CAMP</GothicButton>
+        </div>
       </div>
     </div>
   );
 }
 
-/* ---------------------------------- end ------------------------------------ */
+/* ------------------------------- boss bar HUD ------------------------------ */
 
-export function EndScreen({ stats, onRestart, onMenu }: { stats: EndStats; onRestart: () => void; onMenu: () => void }) {
+export function BossBar({ boss }: { boss: BossSnap }) {
   return (
-    <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-[radial-gradient(ellipse_at_50%_40%,#2f1b46_0%,#150c22_60%,#0d0716_100%)] no-select overflow-hidden animate-fadein">
-      <Embers n={stats.victory ? 30 : 10} />
-      <div className="relative z-10 flex flex-col items-center px-4 w-full max-w-2xl">
-        <div
-          className="font-display font-black text-[clamp(48px,8vw,84px)] leading-none text-outline animate-popin"
-          style={{ color: stats.victory ? '#ffc258' : '#e6404f', textShadow: `0 0 40px ${stats.victory ? 'rgba(255,194,88,0.5)' : 'rgba(230,64,79,0.5)'}` }}
-        >
-          {stats.victory ? 'SANCTUARY ENDURES' : 'YOU HAVE FALLEN'}
-        </div>
-        <div className="font-body font-bold text-parch/80 mt-2 mb-6 text-sm tracking-wide">
-          {stats.victory
-            ? stats.bossKills >= 4
-              ? 'All four Prime Evils lie broken. The Heavens sing your name.'
-              : 'You outlasted the night. The horde recedes... for now.'
-            : `The horde claimed you at ${fmtTime(stats.time)}. The Gloom deepens.`}
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 w-full mb-5">
-          {stats.stats.map((s, i) => (
-            <div key={i} className="pixel-corners gothic-frame bg-panel/90 px-3 py-2.5 animate-cardin" style={{ animationDelay: `${i * 0.05}s` }}>
-              <div className="text-[10px] font-black tracking-widest text-parch/60 uppercase">{s.label}</div>
-              <div className="font-display font-bold text-xl text-ember leading-tight">{s.value}</div>
-            </div>
+    <div className="w-[min(620px,86vw)]">
+      <div className="flex items-end justify-between mb-0.5 px-1">
+        <span className="font-display text-blood text-lg leading-none tracking-wide text-outline">{boss.name}</span>
+        <div className="flex gap-1 items-center">
+          {Array.from({ length: boss.phases }).map((_, i) => (
+            <div
+              key={i}
+              className="w-2.5 h-2.5 rotate-45 border border-ink"
+              style={{ background: i < boss.phase ? '#e6404f' : '#3a2354' }}
+            />
           ))}
         </div>
-
-        {stats.fusions.length > 0 && (
-          <div className="w-full pixel-corners gothic-frame bg-panel/80 p-3 mb-6 animate-cardin" style={{ animationDelay: '0.3s' }}>
-            <div className="flex items-center gap-2 mb-1.5">
-              <FusionSigil size={18} />
-              <span className="text-[10px] font-black tracking-[0.25em] text-arcane">EVOLUTIONS FORGED</span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {stats.fusions.map((f, i) => (
-                <span key={i} className="pixel-corners bg-[#33203a] border border-arcane/50 px-2 py-0.5 text-[11px] font-black text-arcane">
-                  {f}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="flex gap-3">
-          <GothicButton big onClick={onRestart}>RISE AGAIN</GothicButton>
-          <GothicButton big onClick={onMenu} color="#8d7ba8">MAIN MENU</GothicButton>
-        </div>
+      </div>
+      <div className="h-[13px] pixel-corners bg-[#120a1c] border-2 border-[#7d2733] overflow-hidden">
+        <div className="h-full" style={{ width: `${boss.hpPct * 100}%`, background: 'linear-gradient(90deg,#7d1220,#e6404f 45%,#ff8a3d)' }} />
       </div>
     </div>
   );
 }
 
-/* --------------------------------- banner ---------------------------------- */
-
-export interface BannerData {
-  id: number;
-  title: string;
-  sub?: string;
-}
-
-export function BannerLayer({ banners }: { banners: BannerData[] }) {
-  return (
-    <div className="absolute inset-x-0 top-[22%] z-20 flex flex-col items-center gap-2 pointer-events-none no-select">
-      {banners.map((b) => (
-        <div key={b.id} className="text-center animate-bannerin">
-          <div
-            className="font-display font-black text-[clamp(30px,5vw,52px)] leading-none text-outline text-blood"
-            style={{ textShadow: '0 0 30px rgba(230,64,79,0.55), 0 3px 0 #120a1c' }}
-          >
-            {b.title}
-          </div>
-          {b.sub && <div className="font-display text-parch text-lg tracking-[0.3em] text-outline mt-1">{b.sub}</div>}
-        </div>
-      ))}
-    </div>
-  );
-}
+/* keep snapshot type referenced for consumers */
+export type { Snapshot };
+export { fmtTime };

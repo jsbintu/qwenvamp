@@ -10,6 +10,10 @@ import type {
 } from './types';
 import { isWeapon, PASSIVE_IDS, WEAPON_IDS } from './types';
 import { sfx, setMuted } from './audio';
+import {
+  Animator, SPR_R, drawFx, fxFrame, getFogs, getProp, getTileCanvas, propAt,
+  TILE, tileVariant,
+} from './sprites';
 
 /* ------------------------------ internal types ----------------------------- */
 
@@ -18,7 +22,6 @@ interface WeaponSlot {
   lvl: number;
   cd: number;
   fused?: { def: FusionDef; partner: CompId };
-  /* recomputed */
   dmg: number; rcd: number; area: number; proj: number; pierce: number;
   pspd: number; crit: number; mods: Set<string>;
 }
@@ -36,7 +39,9 @@ interface Enemy {
   ai: { state: number; t: number; ax: number; ay: number; ang: number };
   bossIdx: number; phase: number; atkT: number; cycle: number;
   atk: { type: string; t: number; dur: number; ax: number; ay: number; done: boolean } | null;
-  spikeT: number; hurtT: number; seed: number; dead: boolean;
+  spikeT: number; hurtT: number; seed: number;
+  dead: boolean; gone: boolean; dying: number;
+  anim: Animator; face: number;
 }
 
 interface Proj {
@@ -52,17 +57,19 @@ interface EBullet {
 
 interface Particle {
   x: number; y: number; vx: number; vy: number; life: number; maxLife: number;
-  size: number; color: string; kind: 'dot' | 'spark' | 'ring' | 'shard' | 'smoke';
+  size: number; color: string;
+  kind: 'dot' | 'spark' | 'ring' | 'shard' | 'smoke' | 'sprite';
+  spr?: string; rot?: number; vr?: number;
 }
 
 interface Floater { x: number; y: number; t: number; txt: string; color: string; size: number; }
-interface Decal { x: number; y: number; r: number; a: number; color: string; }
+interface Decal { x: number; y: number; r: number; a: number; color: string; spr?: number; }
 interface Pickup { x: number; y: number; kind: 'xp' | 'gold' | 'heal' | 'chest'; v: number; t: number; }
 interface Spike { x: number; y: number; t: number; dur: number; dmg: number; slot: number; }
 interface Orbital { ang: number; r: number; dmg: number; kind: 'blade' | 'scythe'; slot: number; }
 
 interface Hazard {
-  kind: 'pool' | 'beam' | 'warnc' | 'warnl' | 'burst' | 'pillar';
+  kind: 'pool' | 'beam' | 'warnc' | 'burst' | 'pillar';
   x: number; y: number; x2: number; y2: number; r: number; ang: number;
   t: number; dur: number; dmg: number; color: string; slow: boolean; owner: 'e' | 'p'; slot: number;
 }
@@ -82,11 +89,6 @@ const dist2 = (ax: number, ay: number, bx: number, by: number) => {
   return dx * dx + dy * dy;
 };
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
-function hash2(x: number, y: number): number {
-  let h = (x * 374761393 + y * 668265263) | 0;
-  h = (h ^ (h >> 13)) * 1274126177;
-  return ((h ^ (h >> 16)) >>> 0) / 4294967295;
-}
 
 /* ================================= ENGINE ================================= */
 
@@ -96,11 +98,10 @@ export class GloomfallEngine {
   private cb: Callbacks;
   private raf = 0;
   private last = 0;
-  private running = false;
   private paused = false;
   private uiLock = false;
   private over = false;
-  private deathT = -1;
+  private victory = false;
 
   private keys = new Set<string>();
   private W = 0; private H = 0; private dpr = 1;
@@ -127,9 +128,11 @@ export class GloomfallEngine {
   private dmgDealt = 0; private bossKills = 0;
   private iframe = 0;
   private spinT = 0;
+  private spinSlot = 0;
   private phoenixUsed = false;
-  private walkT = 0;
-  private aimAng = 0;
+  private pAtk = 0;
+  private panim: Animator;
+  private muted = false;
 
   /* stats (recomputed) */
   private st = {
@@ -159,7 +162,7 @@ export class GloomfallEngine {
   /* timers */
   private spawnT = 0.5;
   private orbTickT = 0;
-  private wardT = 0; private warT = 0; private bulwarkT = 0;
+  private wardT = 0; private warT = 0;
   private emberCd = 0; private magnetT = 0; private magnetPull = 0;
   private judgmentT = 0; private tempestT = 0; private meteorT = 0;
   private eruptionT = 0; private trailT = 0;
@@ -170,6 +173,7 @@ export class GloomfallEngine {
     this.cb = cb;
     this.classId = classId;
     this.c = canvas.getContext('2d')!;
+    this.panim = new Animator(`player-${classId}`);
     this.resize();
     window.addEventListener('resize', this.resize);
     window.addEventListener('keydown', this.kd);
@@ -192,11 +196,8 @@ export class GloomfallEngine {
     this.paused = p;
     if (!p) this.last = performance.now();
   }
-  toggleMute(): boolean {
-    setMuted(true);
-    return true;
-  }
   setMutedState(m: boolean) {
+    this.muted = m;
     setMuted(m);
   }
 
@@ -273,7 +274,6 @@ export class GloomfallEngine {
       proj += f.projBonus;
       f.mods.forEach((m) => mods.add(m));
     }
-    /* global passive contributions */
     dmg *= this.st.dmgMul;
     cd *= this.st.cdMul;
     area *= this.st.areaMul;
@@ -457,6 +457,7 @@ export class GloomfallEngine {
     this.freeze = 0.08;
     this.burst(this.px, this.py, 46, def.color, 'spark');
     this.ring(this.px, this.py, def.color, 160);
+    this.spawnSprite('exp-holy', this.px, this.py, 180, 0.6, 0, 0);
     sfx.fuse();
     this.cb.onEvolve(def.name, def.desc, !!def.flagship);
   }
@@ -529,13 +530,18 @@ export class GloomfallEngine {
       flash: 0, slow: 0, elite,
       ai: { state: 0, t: rand(0, 2), ax: 0, ay: 0, ang: 0 },
       bossIdx, phase: 0, atkT: 2, cycle: 0, atk: null,
-      spikeT: 0, hurtT: 0, seed: Math.random() * 100, dead: false,
+      spikeT: 0, hurtT: 0, seed: Math.random() * 100,
+      dead: false, gone: false, dying: -1,
+      anim: new Animator(`en-${def.skin}`), face: 1,
     };
     this.enemies.push(e);
     if (def.boss) {
-      this.cb.onBanner(`${(def as BossDef).name.toUpperCase()}`, (def as BossDef).title);
+      const bd = def as BossDef;
+      this.cb.onBanner(`${bd.name.toUpperCase()}`, bd.title);
       sfx.boss();
       this.shake = 16;
+      this.ring(ex, ey, bd.color, 200);
+      this.burst(ex, ey, 24, bd.color, 'spark');
     }
     return e;
   }
@@ -564,19 +570,56 @@ export class GloomfallEngine {
   }
 
   /* ------------------------------ enemy AI -------------------------------- */
-  /* Small behavior trees: selector over (telegraphed attack, ranged band, chase). */
+
+  private deriveAnim(e: Enemy) {
+    const a = e.anim;
+    if (['attack', 'cast', 'charge', 'hurt', 'die'].includes(a.clipName) && !a.done) return;
+    let want = 'walk';
+    if (e.bossIdx >= 0) {
+      if (e.atk) {
+        want = ['charge', 'dash'].includes(e.atk.type) ? 'attack' : 'cast';
+      }
+    } else {
+      switch (e.skin) {
+        case 'spitter':
+        case 'hexer':
+        case 'archer':
+          want = e.ai.state === 1 ? 'cast' : 'walk';
+          break;
+        case 'goatkin':
+          want = e.ai.state === 1 ? 'charge' : e.ai.state === 2 ? 'attack' : 'walk';
+          break;
+        case 'brute':
+          want = e.ai.state === 1 ? 'attack' : 'walk';
+          break;
+        case 'wraith':
+          want = e.ai.state === 1 ? 'attack' : 'walk';
+          break;
+        default:
+          want = 'walk';
+      }
+    }
+    if (want !== a.clipName) a.play(want);
+  }
 
   private updateEnemies(dt: number) {
     const px = this.px, py = this.py;
     for (const e of this.enemies) {
-      if (e.dead) continue;
+      if (e.dead) {
+        e.dying += dt;
+        e.anim.update(dt);
+        if (e.dying > (e.bossIdx >= 0 ? 1.15 : 0.62)) e.gone = true;
+        continue;
+      }
       e.flash = Math.max(0, e.flash - dt * 5);
       e.spikeT = Math.max(0, e.spikeT - dt);
       e.hurtT = Math.max(0, e.hurtT - dt);
       e.slow = Math.max(0, e.slow - dt);
+      e.anim.update(dt);
+      e.face = px < e.x ? -1 : 1;
       const slowF = e.slow > 0 && !this.st.flags.has('noslow') ? 0.55 : 1;
 
-      if (e.bossIdx >= 0) { this.updateBoss(e, dt, slowF); continue; }
+      if (e.bossIdx >= 0) { this.updateBoss(e, dt, slowF); this.deriveAnim(e); continue; }
 
       const dx = px - e.x, dy = py - e.y;
       const d = Math.hypot(dx, dy) || 1;
@@ -648,11 +691,11 @@ export class GloomfallEngine {
             if (ai.t <= 0 && d < 340) { ai.state = 1; ai.t = 0.6; ai.ang = Math.atan2(dy, dx); sfx.telegraph(); }
           } else if (ai.state === 1) {
             ai.t -= dt;
-            e.x += Math.cos(ai.ang + Math.PI) * 14 * dt * Math.sin(this.time * 40);
             if (ai.t <= 0) { ai.state = 2; ai.t = 0.65; }
           } else if (ai.state === 2) {
             e.x += Math.cos(ai.ang) * spd * 3.1 * dt;
             e.y += Math.sin(ai.ang) * spd * 3.1 * dt;
+            if (Math.random() < dt * 20) this.puff(e.x, e.y, '#8a7355');
             ai.t -= dt;
             if (ai.t <= 0) { ai.state = 3; ai.t = 1; }
           } else {
@@ -707,6 +750,7 @@ export class GloomfallEngine {
               ai.state = 2; ai.t = 1.2;
               this.hazards.push({ kind: 'burst', x: ai.ax, y: ai.ay, x2: 0, y2: 0, r: 95, ang: 0, t: 0, dur: 0.25, dmg: e.dmg, color: '#d95f4d', slow: false, owner: 'e', slot: -1 });
               this.ring(ai.ax, ai.ay, '#d95f4d', 95);
+              this.spawnSprite('exp-fire', ai.ax, ai.ay, 150, 0.45, 0, 0);
               this.shakeAt(6);
               sfx.explode();
             }
@@ -727,10 +771,10 @@ export class GloomfallEngine {
           e.x += nx * spd * dt; e.y += ny * spd * dt;
         }
       }
-      /* contact damage */
       if (e.dmg > 0 && dist2(e.x, e.y, px, py) < (e.r + 15) * (e.r + 15)) {
         this.hurtPlayer(e.dmg, e);
       }
+      this.deriveAnim(e);
     }
     /* separation */
     for (let i = 0; i < this.enemies.length; i++) {
@@ -742,10 +786,10 @@ export class GloomfallEngine {
         const rr = (a.r + b.r) * 0.6;
         const d2 = dist2(a.x, a.y, b.x, b.y);
         if (d2 < rr * rr && d2 > 0.01) {
-          const d = Math.sqrt(d2);
-          const push = ((rr - d) / d) * 0.35;
-          const dx = (a.x - b.x) * push, dy = (a.y - b.y) * push;
-          a.x += dx; a.y += dy; b.x -= dx; b.y -= dy;
+          const dd = Math.sqrt(d2);
+          const push = ((rr - dd) / dd) * 0.35;
+          const ddx = (a.x - b.x) * push, ddy = (a.y - b.y) * push;
+          a.x += ddx; a.y += ddy; b.x -= ddx; b.y -= ddy;
         }
       }
     }
@@ -774,14 +818,12 @@ export class GloomfallEngine {
     const dx = this.px - e.x, dy = this.py - e.y;
     const d = Math.hypot(dx, dy) || 1;
 
-    /* execute current attack */
     if (e.atk) {
       const a = e.atk;
       a.t += dt;
       this.runBossAttack(e, a, dt);
       if (a.t >= a.dur) e.atk = null;
     } else {
-      /* approach */
       if (d > e.r + 60) {
         e.x += (dx / d) * spd * dt;
         e.y += (dy / d) * spd * dt;
@@ -819,7 +861,6 @@ export class GloomfallEngine {
       case 'charge': {
         if (a.t < 0.7) {
           if (!a.done) { a.done = true; a.ax = Math.cos(angP); a.ay = Math.sin(angP); sfx.telegraph(); }
-          /* telegraph handled by drawing line from boss along ax,ay */
         } else {
           e.x += a.ax * e.speed * 4.2 * dt;
           e.y += a.ay * e.speed * 4.2 * dt;
@@ -938,7 +979,7 @@ export class GloomfallEngine {
         if (n > fired && n <= 5) {
           this.hazards.push({
             kind: 'warnc', x: this.px + rand(-160, 160), y: this.py + rand(-160, 160), x2: 0, y2: 0,
-            r: 70, ang: 0, t: 0.75, dur: 0.3, dmg: e.dmg * 0.8, color: def.color, slow: false, owner: 'e', slot: -1,
+            r: 70, ang: 0, t: 0, dur: 0.75, dmg: e.dmg * 0.8, color: def.color, slow: false, owner: 'e', slot: -1,
           });
         }
         break;
@@ -999,16 +1040,18 @@ export class GloomfallEngine {
           if (!t) { s.cd = 0.15; break; }
           const base = Math.atan2(t.y - this.py, t.x - this.px);
           this.fireSpears(i, base, s);
-          if (s.mods.has('barrage')) setTimeout2(this, 0.18, () => this.fireSpears(i, base + 0.15, s));
+          if (s.mods.has('barrage')) {
+            const slot = this.weapons[i];
+            deferred.push({ at: this.time + 0.18, fn: () => { if (this.weapons.includes(slot)) this.fireSpears(i, base + 0.15, slot); } });
+          }
           s.cd = s.rcd;
           break;
         }
         case 'aura': {
-          const R2 = R * R;
           let hitAny = false;
           for (const e of this.enemies) {
             if (e.dead) continue;
-            if (dist2(e.x, e.y, this.px, this.py) < (Math.sqrt(R2) + e.r) * (Math.sqrt(R2) + e.r)) {
+            if (dist2(e.x, e.y, this.px, this.py) < (R + e.r) * (R + e.r)) {
               this.damageEnemy(e, s.dmg, i, 0);
               hitAny = true;
             }
@@ -1023,10 +1066,10 @@ export class GloomfallEngine {
           this.chainFrom(this.px, this.py, t, s.proj + 2, s, i);
           s.cd = s.rcd;
           sfx.zap();
+          this.pAtk = Math.max(this.pAtk, 0.3);
           break;
         }
         case 'blades': {
-          /* damage tick for orbitals is in updateOrbitals; here just ensure count */
           s.cd = s.rcd;
           break;
         }
@@ -1034,14 +1077,16 @@ export class GloomfallEngine {
           const back = this.facing < 0 ? 0 : Math.PI;
           for (let k = 0; k < s.proj; k++) {
             const a = back + rand(-1.1, 1.1);
-            const d = rand(40, 120) * s.area;
+            const dd = rand(40, 120) * s.area;
             this.spikes.push({
-              x: this.px + Math.cos(a) * d, y: this.py + Math.sin(a) * d,
+              x: this.px + Math.cos(a) * dd, y: this.py + Math.sin(a) * dd,
               t: 0, dur: 2.6 * (1 + (s.area - 1) * 0.5), dmg: s.dmg, slot: i,
             });
           }
+          this.burst(this.px - this.facing * 40, this.py + 10, 6, '#b06cff', 'smoke');
           s.cd = s.rcd;
           sfx.bones();
+          this.pAtk = Math.max(this.pAtk, 0.3);
           break;
         }
         case 'whirlwind': {
@@ -1051,6 +1096,7 @@ export class GloomfallEngine {
           this.spinSlot = i;
           s.cd = s.rcd;
           sfx.explode();
+          this.pAtk = Math.max(this.pAtk, 0.5);
           break;
         }
         case 'scythe': {
@@ -1058,10 +1104,20 @@ export class GloomfallEngine {
           if (!t) { s.cd = 0.2; break; }
           const dir = Math.atan2(t.y - this.py, t.x - this.px);
           this.sweep(dir, s, i);
-          if (s.proj >= 2) setTimeout2(this, 0.12, () => this.sweep(dir + Math.PI, s, i));
+          if (s.proj >= 2) {
+            const slot = this.weapons[i];
+            deferred.push({ at: this.time + 0.12, fn: () => { if (this.weapons.includes(slot)) this.sweep(dir + Math.PI, slot, i); } });
+          }
           s.cd = s.rcd;
           break;
         }
+      }
+    }
+    /* deferred micro-tasks */
+    for (let i = deferred.length - 1; i >= 0; i--) {
+      if (deferred[i].at <= this.time) {
+        const d = deferred.splice(i, 1)[0];
+        d.fn();
       }
     }
     /* whirlwind active */
@@ -1078,38 +1134,55 @@ export class GloomfallEngine {
               this.damageEnemy(e, s.dmg * 0.9, this.spinSlot, 0);
               e.hurtT = 0.3;
               if (s.mods.has('pull')) {
-                const d = Math.sqrt(d2) || 1;
-                e.x -= ((e.x - this.px) / d) * 60 * dt * 8;
-                e.y -= ((e.y - this.py) / d) * 60 * dt * 8;
+                const dd = Math.sqrt(d2) || 1;
+                e.x -= ((e.x - this.px) / dd) * 480 * dt;
+                e.y -= ((e.y - this.py) / dd) * 480 * dt;
               }
               if (s.mods.has('bloodthirst')) this.hp = clamp(this.hp + s.dmg * 0.05, 1, this.maxHp);
             }
           }
         }
-        if (Math.random() < dt * 24) {
+        if (Math.random() < dt * 26) {
           const a = rand(0, Math.PI * 2);
           this.particles.push({ x: this.px + Math.cos(a) * R, y: this.py + Math.sin(a) * R, vx: -Math.sin(a) * 120, vy: Math.cos(a) * 120, life: 0.4, maxLife: 0.4, size: 4, color: '#e6404f', kind: 'spark' });
         }
       }
     }
   }
-  private spinSlot = 0;
+
+  private expElem(slot: number): string {
+    const s = this.weapons[slot];
+    if (!s) return 'fire';
+    switch (s.id) {
+      case 'hellfire':
+      case 'whirlwind': return 'fire';
+      case 'lightning':
+      case 'blades': return 'frost';
+      case 'caltrops': return 'arcane';
+      case 'aura': return 'holy';
+      case 'bonespear':
+      case 'scythe': return 'poison';
+    }
+  }
 
   private fireHellfire(i: number, base: number, s: WeaponSlot) {
     for (let k = 0; k < s.proj; k++) {
       const a = base + (k - (s.proj - 1) / 2) * 0.3;
       this.spawnProj(i, a, 300 * s.pspd, s, 'fire', 13, true);
     }
+    this.spawnSprite('spark', this.px + Math.cos(base) * 26, this.py + Math.sin(base) * 26, 26, 0.18, 0, 0);
     sfx.shoot();
+    this.pAtk = Math.max(this.pAtk, 0.35);
   }
 
   private fireSpears(i: number, base: number, s: WeaponSlot) {
-    if (!this.weapons.includes(s)) return;
     for (let k = 0; k < s.proj; k++) {
       const a = base + (k - (s.proj - 1) / 2) * 0.16;
       this.spawnProj(i, a, 430 * s.pspd, s, 'bone', 9, false);
     }
+    this.burst(this.px, this.py, 3, '#d8cfae', 'smoke');
     sfx.bones();
+    this.pAtk = Math.max(this.pAtk, 0.35);
   }
 
   private spawnProj(i: number, ang: number, spd: number, s: WeaponSlot, kind: string, r: number, trail: boolean) {
@@ -1120,23 +1193,19 @@ export class GloomfallEngine {
     };
     this.projs.push(p);
     if (s.mods.has('split') && Math.random() < 0.28) {
-      const q = { ...p, hit: new Set<Enemy>(), x: this.px, y: this.py };
+      const q = { ...p, hit: new Set<Enemy>() };
       const a2 = ang + (Math.random() < 0.5 ? 0.5 : -0.5);
       q.vx = Math.cos(a2) * spd; q.vy = Math.sin(a2) * spd;
       this.projs.push(q);
       this.puff(this.px, this.py, '#c07bff');
     }
     if (s.mods.has('echo') && Math.random() < 0.35) {
-      setTimeout2(this, 0.2, () => {
-        if (this.weapons[i] === s) this.spawnProj(i, ang + rand(-0.15, 0.15), spd, s, kind, r, trail);
-      });
+      const slot = this.weapons[i];
+      deferred.push({ at: this.time + 0.2, fn: () => { if (this.weapons[i] === slot) this.spawnProj(i, ang + rand(-0.15, 0.15), spd, slot, kind, r, trail); } });
     }
-    /* muzzle flash */
-    this.particles.push({ x: this.px + Math.cos(ang) * 22, y: this.py + Math.sin(ang) * 22, vx: Math.cos(ang) * 60, vy: Math.sin(ang) * 60, life: 0.12, maxLife: 0.12, size: 9, color: '#ffc258', kind: 'dot' });
   }
 
-  private chainFrom(x: number, y: number, first: Enemy | null, jumps: number, s: WeaponSlot, slot: number) {
-    if (!first) return;
+  private chainFrom(x: number, y: number, first: Enemy, jumps: number, s: WeaponSlot, slot: number) {
     let cx = x, cy = y;
     let cur: Enemy | null = first;
     const hitSet = new Set<Enemy>();
@@ -1144,6 +1213,7 @@ export class GloomfallEngine {
       this.arcs.push({ x1: cx, y1: cy, x2: cur.x, y2: cur.y, t: 0.22, color: WEAPONS[s.id].color });
       hitSet.add(cur);
       this.damageEnemy(cur, s.dmg * (j === 0 ? 1 : 0.75), slot, 60);
+      this.spawnSprite('spark', cur.x, cur.y, 22, 0.16, 0, 0);
       if (s.mods.has('explode')) this.explodeAt(cur.x, cur.y, 70 * s.area, s.dmg * 0.5, slot, s);
       cx = cur.x; cy = cur.y;
       const from = cur;
@@ -1172,16 +1242,9 @@ export class GloomfallEngine {
         this.damageEnemy(e, s.dmg, slot, 170, 1.4);
       }
     }
-    /* swing arc visual */
-    for (let k = 0; k < 8; k++) {
-      const a = dir + (k / 7 - 0.5) * arcW * 2;
-      this.particles.push({
-        x: this.px + Math.cos(a) * R * 0.8, y: this.py + Math.sin(a) * R * 0.8,
-        vx: Math.cos(a + Math.PI / 2) * 160, vy: Math.sin(a + Math.PI / 2) * 160,
-        life: 0.25, maxLife: 0.25, size: 5, color: WEAPONS[s.id].color, kind: 'spark',
-      });
-    }
+    this.spawnSprite('slash-green', this.px + Math.cos(dir) * R * 0.5, this.py + Math.sin(dir) * R * 0.5, R * 1.9, 0.3, dir, 0);
     sfx.shoot();
+    this.pAtk = Math.max(this.pAtk, 0.4);
   }
 
   /* --------------------------- projectile update -------------------------- */
@@ -1192,7 +1255,7 @@ export class GloomfallEngine {
       p.y += p.vy * dt;
       p.life -= dt;
       if (p.trail && Math.random() < dt * 40) {
-        this.particles.push({ x: p.x, y: p.y, vx: rand(-15, 15), vy: rand(-15, 15), life: 0.3, maxLife: 0.3, size: p.r * 0.5, color: p.color, kind: 'dot' });
+        this.particles.push({ x: p.x, y: p.y, vx: rand(-15, 15), vy: rand(-30, -5), life: 0.35, maxLife: 0.35, size: p.r * 0.45, color: Math.random() < 0.5 ? '#ffc258' : '#ff8a3d', kind: 'dot' });
       }
       for (const e of this.enemies) {
         if (e.dead || p.hit.has(e)) continue;
@@ -1215,7 +1278,6 @@ export class GloomfallEngine {
   private onProjHit(p: Proj, e: Enemy) {
     const s = this.weapons[p.slot];
     if (!s) { this.damageEnemy(e, p.dmg, p.slot, p.knock); return; }
-    /* shieldkin frontal block */
     if (e.skin === 'shieldkin') {
       const angIn = Math.atan2(p.y - e.y, p.x - e.x);
       let da = angIn - e.ai.ang;
@@ -1225,14 +1287,17 @@ export class GloomfallEngine {
         this.floater(e.x, e.y - e.r, 'BLOCK', '#8fa3b8', 11);
         sfx.hit();
         p.pierce = Math.min(p.pierce, 0);
-        p.life = p.kind === 'bone' ? p.life : 0;
+        if (p.kind !== 'bone') p.life = 0;
         return;
       }
     }
     this.damageEnemy(e, p.dmg, p.slot, p.knock);
     const m = s.mods;
     if (m.has('explode')) this.explodeAt(e.x, e.y, 75 * s.area, p.dmg * 0.5, p.slot, s);
-    if (m.has('chain')) this.chainFrom(e.x, e.y, this.nearestTo(e, 220 * s.area, e), 3, s, p.slot);
+    if (m.has('chain')) {
+      const nt = this.nearestTo(e, 220 * s.area, e);
+      if (nt) this.chainFrom(e.x, e.y, nt, 3, s, p.slot);
+    }
     if (m.has('spikes')) {
       for (let k = 0; k < 3; k++) {
         this.spikes.push({ x: e.x + rand(-30, 30), y: e.y + rand(-30, 30), t: 0, dur: 2.2, dmg: p.dmg * 0.6, slot: p.slot });
@@ -1243,9 +1308,9 @@ export class GloomfallEngine {
         if (o.dead) continue;
         const d2 = dist2(o.x, o.y, e.x, e.y);
         if (d2 < 120 * 120) {
-          const d = Math.sqrt(d2) || 1;
-          o.x -= ((o.x - e.x) / d) * 40;
-          o.y -= ((o.y - e.y) / d) * 40;
+          const dd = Math.sqrt(d2) || 1;
+          o.x -= ((o.x - e.x) / dd) * 40;
+          o.y -= ((o.y - e.y) / dd) * 40;
         }
       }
     }
@@ -1268,8 +1333,12 @@ export class GloomfallEngine {
       const rr = r + e.r;
       if (dist2(e.x, e.y, x, y) < rr * rr) this.damageEnemy(e, dmg, slot, 90);
     }
+    const elem = this.expElem(slot);
+    this.spawnSprite(`exp-${elem}`, x, y, r * 2.3, 0.5, 0, 0);
     this.ring(x, y, WEAPONS[s.id].color, r);
-    this.burst(x, y, 10, WEAPONS[s.id].color, 'spark');
+    this.burst(x, y, 8, WEAPONS[s.id].color, 'spark');
+    for (let i = 0; i < 3; i++) this.puff(x + rand(-r, r) * 0.5, y + rand(-r, r) * 0.5, '#5c4460');
+    if (this.decals.length < 130) this.decals.push({ x, y, r: r * 0.7, a: 0.4, color: '#120818' });
     if (s.mods.has('inferno')) {
       this.hazards.push({ kind: 'pool', x, y, x2: 0, y2: 0, r: r * 0.8, ang: 0, t: 0, dur: 2.4, dmg: dmg * 0.5, color: '#ff8a3d', slow: false, owner: 'p', slot });
     }
@@ -1293,11 +1362,13 @@ export class GloomfallEngine {
     if (crit) {
       sfx.crit();
       this.freeze = Math.max(this.freeze, 0.03);
-    } else if (Math.random() < 0.25) sfx.hit();
+      this.spawnSprite('spark', e.x, e.y - e.r * 0.5, 26, 0.2, 0, 0);
+    } else if (Math.random() < 0.2) sfx.hit();
+    if (e.bossIdx < 0 && Math.random() < 0.35 && e.anim.clipName !== 'hurt') e.anim.play('hurt');
     if (knock > 0 && e.bossIdx < 0) {
-      const d = Math.hypot(e.x - this.px, e.y - this.py) || 1;
-      e.x += ((e.x - this.px) / d) * knock * 0.12;
-      e.y += ((e.y - this.py) / d) * knock * 0.12;
+      const dd = Math.hypot(e.x - this.px, e.y - this.py) || 1;
+      e.x += ((e.x - this.px) / dd) * knock * 0.12;
+      e.y += ((e.y - this.py) / dd) * knock * 0.12;
     }
     this.burst(e.x, e.y, crit ? 6 : 2, '#a01830', 'dot');
     if (this.st.lifeSteal > 0) this.hp = clamp(this.hp + dmg * this.st.lifeSteal, 1, this.maxHp);
@@ -1306,30 +1377,28 @@ export class GloomfallEngine {
 
   private killEnemy(e: Enemy, slot: number) {
     e.dead = true;
+    e.dying = 0;
+    e.anim.play('die', true);
     this.kills++;
     const s = this.weapons[slot];
-    /* gore decal */
     if (this.decals.length < 130) {
-      this.decals.push({ x: e.x, y: e.y, r: e.r * rand(0.9, 1.5), a: 0.5, color: e.skin === 'clatter' ? '#6b6350' : '#4d0f1c' });
+      this.decals.push({ x: e.x, y: e.y + e.r * 0.4, r: e.r * rand(0.9, 1.4), a: 0.55, color: '#5c1220', spr: Math.floor(rand(0, 3)) });
     }
     this.burst(e.x, e.y, e.elite ? 16 : 7, e.def.color, 'shard');
-    /* xp */
+    this.spawnSprite('soul-green', e.x, e.y - e.r * 0.4, 22, 0.55, 0, -70);
     const xpVal = e.xp * (this.st.flags.has('erudite') && Math.random() < 0.12 ? 2 : 1);
     this.dropXp(e.x, e.y, xpVal);
-    /* gold */
     const goldChance = 0.28 + this.st.luck * 0.5 + (s && s.mods.has('gilded') ? 0.5 : 0);
     if (Math.random() < goldChance) {
       this.pickups.push({ x: e.x + rand(-10, 10), y: e.y + rand(-10, 10), kind: 'gold', v: Math.round((3 + Math.random() * 6) * this.st.goldMul), t: 0 });
     }
     if (s && s.mods.has('gilded')) this.burst(e.x, e.y, 5, '#ffc258', 'dot');
-    /* chests */
     if (e.elite) this.pickups.push({ x: e.x, y: e.y, kind: 'chest', v: 0, t: 0 });
     if (e.skin === 'goblin') {
       this.pickups.push({ x: e.x, y: e.y, kind: 'chest', v: 0, t: 0 });
       for (let i = 0; i < 6; i++) this.pickups.push({ x: e.x + rand(-40, 40), y: e.y + rand(-40, 40), kind: 'gold', v: Math.round(8 * this.st.goldMul), t: 0 });
       sfx.goblin();
     }
-    /* boss death */
     if (e.bossIdx >= 0) {
       this.bossKills++;
       this.timeScale = 0.25;
@@ -1337,6 +1406,7 @@ export class GloomfallEngine {
       this.shakeAt(18);
       this.ring(e.x, e.y, e.def.color, 260);
       this.burst(e.x, e.y, 40, e.def.color, 'shard');
+      this.spawnSprite(`exp-${this.expElem(0)}`, e.x, e.y, e.r * 7, 0.9, 0, 0);
       this.pickups.push({ x: e.x, y: e.y, kind: 'chest', v: 0, t: 0 });
       this.dropXp(e.x, e.y, e.xp);
       sfx.explode();
@@ -1348,7 +1418,6 @@ export class GloomfallEngine {
   private dropXp(x: number, y: number, v: number) {
     let left = v;
     const tiers = [30, 15, 5, 1];
-    const colors = ['#ffc258', '#c07bff', '#7fd4e8', '#9be85e'];
     let ti = 0;
     while (left > 0 && this.pickups.length < 320) {
       while (ti < tiers.length - 1 && left < tiers[ti]) ti++;
@@ -1357,7 +1426,6 @@ export class GloomfallEngine {
       left -= take;
       if (take < tiers[ti]) ti++;
     }
-    void colors;
   }
 
   private hurtPlayer(amount: number, src?: Enemy) {
@@ -1370,6 +1438,7 @@ export class GloomfallEngine {
     this.redFlash = 0.5;
     this.shakeAt(7);
     sfx.hurt();
+    this.panim.play('hurt');
     this.floater(this.px, this.py - 26, `-${dmg}`, '#e6404f', 14);
     if (this.st.flags.has('thorns') && src && src.bossIdx < 0) {
       src.hp -= 8 + this.level * 2;
@@ -1378,7 +1447,8 @@ export class GloomfallEngine {
     }
     if (this.st.flags.has('emberheart') && this.emberCd <= 0) {
       this.emberCd = 6;
-      this.explodeAt(this.px, this.py, 150, 40 + this.level * 4, 0, { ...this.mkSlot('hellfire'), dmg: 1, area: 1, mods: new Set<string>(['inferno']) } as WeaponSlot);
+      const fake = { ...this.mkSlot('hellfire'), dmg: 1, area: 1, mods: new Set<string>(['inferno']) } as WeaponSlot;
+      this.explodeAt(this.px, this.py, 150, 40 + this.level * 4, 0, fake);
     }
     if (this.hp <= 0) {
       if (this.st.flags.has('phoenix') && !this.phoenixUsed) {
@@ -1386,7 +1456,8 @@ export class GloomfallEngine {
         this.hp = this.maxHp * 0.6;
         this.iframe = 2;
         this.flashT = 0.7;
-        this.explodeAt(this.px, this.py, 260, 120, 0, { ...this.mkSlot('hellfire'), dmg: 1, area: 1.5, mods: new Set<string>(['inferno']) } as WeaponSlot);
+        const fake = { ...this.mkSlot('hellfire'), dmg: 1, area: 1.5, mods: new Set<string>(['inferno']) } as WeaponSlot;
+        this.explodeAt(this.px, this.py, 260, 120, 0, fake);
         this.cb.onBanner('THE PHOENIX REBIRTHS YOU');
         sfx.fuse();
       } else {
@@ -1407,7 +1478,8 @@ export class GloomfallEngine {
       this.wardT -= dt;
       if (this.wardT <= 0) {
         this.wardT = 5;
-        this.explodeAt(this.px, this.py, 170 * this.st.areaMul, 25 + this.level * 3, 0, this.weapons[0] ?? ({ ...this.mkSlot('aura'), area: 1.2, mods: new Set<string>() } as WeaponSlot));
+        const w0 = this.weapons[0] ?? ({ ...this.mkSlot('aura'), area: 1.2 } as WeaponSlot);
+        this.explodeAt(this.px, this.py, 170 * this.st.areaMul, 25 + this.level * 3, 0, w0);
         this.ring(this.px, this.py, '#8d7ba8', 170);
       }
     }
@@ -1428,7 +1500,6 @@ export class GloomfallEngine {
     }
     this.magnetPull = Math.max(0, this.magnetPull - dt);
 
-    /* weapon-flag procs */
     let hasJudge = false, hasTempest = false, hasMeteor = false, hasErupt = false;
     for (const w of this.weapons) {
       if (w.mods.has('judgment')) hasJudge = true;
@@ -1451,7 +1522,8 @@ export class GloomfallEngine {
       this.tempestT -= dt;
       if (this.tempestT <= 0) {
         this.tempestT = 5 / this.st.cdMul;
-        this.explodeAt(this.px, this.py, 240 * this.st.areaMul, 50 + this.level * 5, 0, this.weapons[0] ?? ({ ...this.mkSlot('lightning'), area: 1.5, mods: new Set<string>() } as WeaponSlot));
+        const w0 = this.weapons[0] ?? ({ ...this.mkSlot('lightning'), area: 1.5 } as WeaponSlot);
+        this.explodeAt(this.px, this.py, 240 * this.st.areaMul, 50 + this.level * 5, 0, w0);
         this.ring(this.px, this.py, '#7fd4e8', 240);
       }
     }
@@ -1461,7 +1533,7 @@ export class GloomfallEngine {
         this.meteorT = 6 / this.st.cdMul;
         const targets = this.enemies.filter((e) => !e.dead).slice(0, 5);
         for (const t of targets) {
-          this.hazards.push({ kind: 'warnc', x: t.x, y: t.y, x2: 0, y2: 0, r: 78, ang: 0, t: 0, dur: 0.3, dmg: 90 + this.level * 8, color: '#ff8a3d', slow: false, owner: 'p', slot: 0 });
+          this.hazards.push({ kind: 'warnc', x: t.x, y: t.y, x2: 0, y2: 0, r: 78, ang: 0, t: 0, dur: 0.8, dmg: 90 + this.level * 8, color: '#ff8a3d', slow: false, owner: 'p', slot: 0 });
         }
         if (targets.length) sfx.telegraph();
       }
@@ -1470,8 +1542,9 @@ export class GloomfallEngine {
       this.eruptionT -= dt;
       if (this.eruptionT <= 0) {
         this.eruptionT = 1.6 / this.st.cdMul;
-        const t = this.enemies.filter((e) => !e.dead)[Math.floor(Math.random() * Math.max(1, this.enemies.length))];
-        if (t && !t.dead) {
+        const alive = this.enemies.filter((e) => !e.dead);
+        const t = alive[Math.floor(Math.random() * alive.length)];
+        if (t) {
           for (let k = 0; k < 4; k++) this.spikes.push({ x: t.x + rand(-26, 26), y: t.y + rand(-26, 26), t: 0, dur: 2.2, dmg: 24 + this.level * 2, slot: 0 });
           this.ring(t.x, t.y, '#b06cff', 40);
         }
@@ -1491,11 +1564,11 @@ export class GloomfallEngine {
     let bc = 0;
     for (const e of this.enemies) {
       if (e.dead) continue;
-      let c = 0;
+      let cnt = 0;
       for (const o of this.enemies) {
-        if (o !== e && !o.dead && dist2(e.x, e.y, o.x, o.y) < 130 * 130) c++;
+        if (o !== e && !o.dead && dist2(e.x, e.y, o.x, o.y) < 130 * 130) cnt++;
       }
-      if (c > bc) { bc = c; best = e; }
+      if (cnt > bc) { bc = cnt; best = e; }
     }
     return best ?? this.nearest(600);
   }
@@ -1503,8 +1576,23 @@ export class GloomfallEngine {
   /* ------------------------------ main update ----------------------------- */
 
   private update(dt: number) {
+    if (this.over) {
+      /* keep the world breathing behind the end card; let death anims finish */
+      this.panim.update(dt);
+      for (const e of this.enemies) {
+        if (e.dead) {
+          e.dying += dt;
+          e.anim.update(dt);
+          if (e.dying > 1.2) e.gone = true;
+        }
+      }
+      this.enemies = this.enemies.filter((e) => !e.gone);
+      this.stepFx(dt);
+      return;
+    }
     this.time += dt;
     this.iframe = Math.max(0, this.iframe - dt);
+    this.pAtk = Math.max(0, this.pAtk - dt);
     this.redFlash = Math.max(0, this.redFlash - dt * 1.6);
     this.flashT = Math.max(0, this.flashT - dt);
     this.shake = Math.max(0, this.shake - dt * 26);
@@ -1523,11 +1611,16 @@ export class GloomfallEngine {
       this.px += (mx / len) * spd * dt;
       this.py += (my / len) * spd * dt;
       if (mx !== 0) this.facing = mx > 0 ? 1 : -1;
-      this.walkT += dt * 11;
-      this.aimAng = Math.atan2(my, mx);
     }
     this.cam.x += (this.px - this.cam.x) * Math.min(1, dt * 6);
     this.cam.y += (this.py - this.cam.y) * Math.min(1, dt * 6);
+
+    /* player animator */
+    const pa = this.panim;
+    if (!(['attack', 'cast', 'hurt', 'die'].includes(pa.clipName) && !pa.done)) {
+      pa.play(this.pAtk > 0 ? 'attack' : this.moving ? 'run' : 'idle');
+    }
+    pa.update(dt);
 
     this.updateSpawning(dt);
     this.updateEnemies(dt);
@@ -1539,32 +1632,44 @@ export class GloomfallEngine {
     this.updateBullets(dt);
     this.updatePickups(dt);
 
-    /* particles / floaters / arcs / decals */
+    /* ambient particles */
+    if (this.particles.length < 520 && Math.random() < dt * 14) {
+      this.particles.push({
+        x: this.cam.x + rand(-this.W / 2, this.W / 2),
+        y: this.cam.y + rand(-this.H / 2, this.H / 2),
+        vx: rand(-6, 6), vy: rand(-16, -6),
+        life: rand(1.5, 3), maxLife: 3, size: rand(1, 2.4),
+        color: 'rgba(216,198,154,0.4)', kind: 'dot',
+      });
+    }
+
+    this.stepFx(dt);
+    this.enemies = this.enemies.filter((e) => !e.gone);
+
+    if (this.time >= GAME_DURATION && !this.over) this.finish(true);
+
+    this.snapT -= dt;
+    if (this.snapT <= 0) {
+      this.snapT = 0.1;
+      this.cb.onSnapshot(this.snapshot());
+    }
+  }
+
+  private stepFx(dt: number) {
     for (const p of this.particles) {
       p.x += p.vx * dt; p.y += p.vy * dt;
-      p.vx *= 1 - 3 * dt; p.vy *= 1 - 3 * dt;
+      if (p.kind !== 'sprite') { p.vx *= 1 - 3 * dt; p.vy *= 1 - 3 * dt; }
+      if (p.vr) p.rot = (p.rot ?? 0) + p.vr * dt;
       p.life -= dt;
     }
     this.particles = this.particles.filter((p) => p.life > 0);
-    if (this.particles.length > 620) this.particles.splice(0, this.particles.length - 620);
+    if (this.particles.length > 640) this.particles.splice(0, this.particles.length - 640);
     for (const f of this.floaters) { f.y -= 34 * dt; f.t -= dt; }
     this.floaters = this.floaters.filter((f) => f.t > 0);
     for (const a of this.arcs) a.t -= dt;
     this.arcs = this.arcs.filter((a) => a.t > 0);
     for (const d of this.decals) d.a -= dt * 0.02;
     this.decals = this.decals.filter((d) => d.a > 0.05);
-
-    this.enemies = this.enemies.filter((e) => !e.dead);
-
-    /* win by survival */
-    if (this.time >= GAME_DURATION && !this.over) this.finish(true);
-
-    /* snapshot */
-    this.snapT -= dt;
-    if (this.snapT <= 0) {
-      this.snapT = 0.1;
-      this.cb.onSnapshot(this.snapshot());
-    }
   }
 
   /* ------------------------- orbitals & hazards --------------------------- */
@@ -1592,8 +1697,8 @@ export class GloomfallEngine {
         const R = 100 * s.area;
         for (const e of this.enemies) {
           if (e.dead) continue;
-          const d = Math.abs(Math.hypot(e.x - this.px, e.y - this.py) - R);
-          if (d < 26 + e.r * 0.5 && e.hurtT <= 0) {
+          const dd = Math.abs(Math.hypot(e.x - this.px, e.y - this.py) - R);
+          if (dd < 26 + e.r * 0.5 && e.hurtT <= 0) {
             this.damageEnemy(e, s.dmg * 0.9, i, 60);
             e.hurtT = 0.35;
           }
@@ -1611,7 +1716,7 @@ export class GloomfallEngine {
           if (e.dead) continue;
           if (dist2(e.x, e.y, ox, oy) < (e.r + 16) * (e.r + 16)) {
             this.damageEnemy(e, o.dmg, o.slot, 90);
-            if (Math.random() < 0.4) this.puff(ox, oy, '#c9d4e4');
+            if (Math.random() < 0.4) this.spawnSprite('spark', ox, oy, 18, 0.15, 0, 0);
             break;
           }
         }
@@ -1623,26 +1728,25 @@ export class GloomfallEngine {
     for (const h of this.hazards) {
       h.t += dt;
       if (h.kind === 'warnc') {
-        if (h.t >= h.dur * 0 + (h.owner === 'e' ? 0.8 : 0.8)) {
-          /* convert to active pool or burst */
-          if (h.slow) h.kind = 'pool';
-          else {
+        if (h.t >= 0.8) {
+          if (h.slow) {
+            h.kind = 'pool';
+            h.t = 0;
+          } else {
             h.kind = 'burst';
             h.t = 0;
             h.dur = 0.3;
             if (h.owner === 'p') {
-              const rr = h.r * h.r;
               for (const e of this.enemies) {
                 if (e.dead) continue;
                 if (dist2(e.x, e.y, h.x, h.y) < (h.r + e.r) * (h.r + e.r)) this.damageEnemy(e, h.dmg, h.slot, 80);
               }
-              void rr;
+              this.spawnSprite('exp-fire', h.x, h.y, h.r * 2.2, 0.45, 0, 0);
             }
             this.ring(h.x, h.y, h.color, h.r);
             this.shakeAt(4);
             sfx.explode();
           }
-          h.t = 0;
         }
         continue;
       }
@@ -1658,13 +1762,19 @@ export class GloomfallEngine {
               e.spikeT = 0.5;
             }
           }
+          if (h.color === '#ff8a3d' && Math.random() < dt * 12) {
+            this.particles.push({
+              x: h.x + rand(-h.r, h.r) * 0.6, y: h.y + rand(-h.r, h.r) * 0.4,
+              vx: rand(-8, 8), vy: rand(-70, -35), life: rand(0.3, 0.7), maxLife: 0.7,
+              size: rand(2, 4), color: Math.random() < 0.5 ? '#ffc258' : '#ff8a3d', kind: 'dot',
+            });
+          }
         }
-        if (Math.random() < dt * 10) this.puff(h.x + rand(-h.r, h.r) * 0.7, h.y + rand(-h.r, h.r) * 0.7, h.color);
+        if (Math.random() < dt * 8) this.puff(h.x + rand(-h.r, h.r) * 0.7, h.y + rand(-h.r, h.r) * 0.7, h.color);
       } else if (h.kind === 'beam') {
         h.ang += dt * 1.1;
         const ex = h.x + Math.cos(h.ang) * h.r;
         const ey = h.y + Math.sin(h.ang) * h.r;
-        /* distance from player to segment */
         const L2 = h.r * h.r;
         let t = ((this.px - h.x) * (ex - h.x) + (this.py - h.y) * (ey - h.y)) / L2;
         t = clamp(t, 0, 1);
@@ -1698,6 +1808,7 @@ export class GloomfallEngine {
         if (dist2(e.x, e.y, sp.x, sp.y) < (e.r + 12) * (e.r + 12)) {
           this.damageEnemy(e, sp.dmg, sp.slot, 40);
           e.spikeT = 0.5;
+          this.spawnSprite('spark', e.x, e.y, 16, 0.14, 0, 0);
           sfx.hit();
         }
       }
@@ -1728,14 +1839,13 @@ export class GloomfallEngine {
       p.t += dt;
       const d2 = dist2(p.x, p.y, this.px, this.py);
       if (this.magnetPull > 0 && p.kind !== 'chest') {
-        const d = Math.sqrt(d2) || 1;
-        p.x -= ((p.x - this.px) / d) * 700 * dt;
-        p.y -= ((p.y - this.py) / d) * 700 * dt;
+        const dd = Math.sqrt(d2) || 1;
+        p.x -= ((p.x - this.px) / dd) * 700 * dt;
+        p.y -= ((p.y - this.py) / dd) * 700 * dt;
       } else if (d2 < pr2 && p.kind !== 'chest') {
-        const d = Math.sqrt(d2) || 1;
-        const pull = 520;
-        p.x -= ((p.x - this.px) / d) * pull * dt;
-        p.y -= ((p.y - this.py) / d) * pull * dt;
+        const dd = Math.sqrt(d2) || 1;
+        p.x -= ((p.x - this.px) / dd) * 520 * dt;
+        p.y -= ((p.y - this.py) / dd) * 520 * dt;
       }
       if (d2 < 22 * 22) {
         p.t = -999;
@@ -1778,9 +1888,13 @@ export class GloomfallEngine {
   private finish(victory: boolean) {
     if (this.over) return;
     this.over = true;
-    if (victory) sfx.victory();
-    else {
+    this.victory = victory;
+    if (victory) {
+      sfx.victory();
+      this.cb.onSnapshot(this.snapshot());
+    } else {
       sfx.death();
+      this.panim.play('die', true);
       this.burst(this.px, this.py, 40, '#e6404f', 'shard');
       this.shakeAt(16);
     }
@@ -1803,7 +1917,7 @@ export class GloomfallEngine {
         { label: 'Evolutions', value: `${this.fusionNames.length}` },
       ],
     };
-    setTimeout(() => this.cb.onEnd(stats), victory ? 900 : 1200);
+    setTimeout(() => this.cb.onEnd(stats), victory ? 900 : 1400);
   }
 
   /* ------------------------------- snapshot ------------------------------- */
@@ -1836,7 +1950,7 @@ export class GloomfallEngine {
       time: this.time, duration: GAME_DURATION,
       kills: this.kills, gold: this.gold,
       weapons, passives, boss,
-      muted: false,
+      muted: this.muted,
     };
   }
 
@@ -1863,6 +1977,10 @@ export class GloomfallEngine {
     this.particles.push({ x, y, vx: rand(-20, 20), vy: rand(-40, -10), life: 0.5, maxLife: 0.5, size: rand(3, 6), color, kind: 'smoke' });
   }
 
+  private spawnSprite(spr: string, x: number, y: number, size: number, life: number, vx = 0, vy = 0, rot = 0, vr = 0) {
+    this.particles.push({ x, y, vx, vy, life, maxLife: life, size, color: '#fff', kind: 'sprite', spr, rot, vr });
+  }
+
   private floater(x: number, y: number, txt: string, color: string, size: number) {
     if (this.floaters.length > 60) this.floaters.shift();
     this.floaters.push({ x, y, t: 0.8, txt, color, size });
@@ -1875,7 +1993,7 @@ export class GloomfallEngine {
     let raw = (now - this.last) / 1000;
     this.last = now;
     raw = Math.min(raw, 0.05);
-    if (!this.paused && !this.uiLock && this.deathT < 0) {
+    if (!this.paused && !this.uiLock) {
       if (this.freeze > 0) {
         this.freeze -= raw;
       } else {
@@ -1897,44 +2015,33 @@ export class GloomfallEngine {
     const ox = this.W / 2 - this.cam.x + shx;
     const oy = this.H / 2 - this.cam.y + shy;
 
-    this.drawFloor(c, ox, oy);
+    this.drawGround(c, ox, oy);
 
     c.save();
     c.translate(ox, oy);
 
     /* decals */
     for (const d of this.decals) {
-      c.globalAlpha = d.a * 0.6;
-      c.fillStyle = d.color;
-      c.beginPath();
-      c.ellipse(d.x, d.y, d.r, d.r * 0.65, 0, 0, Math.PI * 2);
-      c.fill();
+      if (d.spr !== undefined) {
+        drawFx(c, 'gore', d.x, d.y, d.r * 2.6, d.spr / 2, 0, d.a * 1.4);
+      } else {
+        c.globalAlpha = d.a * 0.7;
+        c.fillStyle = d.color;
+        c.beginPath();
+        c.ellipse(d.x, d.y, d.r, d.r * 0.65, 0, 0, Math.PI * 2);
+        c.fill();
+        c.globalAlpha = 1;
+      }
     }
-    c.globalAlpha = 1;
 
-    /* hazard visuals under entities */
     this.drawHazardsUnder(c);
 
-    /* pickups */
     for (const p of this.pickups) this.drawPickup(c, p);
 
     /* spikes */
     for (const sp of this.spikes) {
-      const s = Math.min(1, sp.t * 6);
-      c.save();
-      c.translate(sp.x, sp.y);
-      c.scale(s, s);
-      c.fillStyle = '#3d2a55';
-      c.strokeStyle = '#120a1c';
-      c.lineWidth = 2;
-      c.beginPath();
-      c.moveTo(-7, 4); c.lineTo(0, -9); c.lineTo(7, 4); c.closePath();
-      c.fill(); c.stroke();
-      c.fillStyle = '#b06cff';
-      c.beginPath();
-      c.moveTo(-2, 1); c.lineTo(0, -5); c.lineTo(2, 1); c.closePath();
-      c.fill();
-      c.restore();
+      const t01 = sp.t < 0.25 ? (sp.t / 0.25) * 0.3 : 0.3 + fxFrame('caltrop', this.time + sp.x * 0.13) * 0.6;
+      drawFx(c, 'caltrop', sp.x, sp.y, 30, t01);
     }
 
     /* enemies sorted by y */
@@ -1942,51 +2049,28 @@ export class GloomfallEngine {
     for (const e of sorted) this.drawEnemy(c, e);
 
     /* player */
-    if (!this.over || this.deathT >= 0) this.drawPlayer(c);
+    this.drawPlayer(c);
 
     /* orbitals */
     for (const o of this.orbitals) {
       const x = this.px + Math.cos(o.ang) * o.r;
       const y = this.py + Math.sin(o.ang) * o.r;
-      c.save();
-      c.translate(x, y);
-      c.rotate(o.ang + Math.PI / 2);
-      if (o.kind === 'blade') {
-        c.fillStyle = '#c9d4e4';
-        c.strokeStyle = '#120a1c';
-        c.lineWidth = 2;
-        c.beginPath();
-        c.moveTo(0, -11); c.lineTo(5, 6); c.lineTo(-5, 6); c.closePath();
-        c.fill(); c.stroke();
-      } else {
-        c.fillStyle = '#9be85e';
-        c.strokeStyle = '#120a1c';
-        c.lineWidth = 2;
-        c.beginPath();
-        c.moveTo(-8, 6); c.quadraticCurveTo(-10, -8, 6, -10);
-        c.quadraticCurveTo(10, -10, 10, -6);
-        c.quadraticCurveTo(0, -4, -2, 6);
-        c.closePath();
-        c.fill(); c.stroke();
-      }
-      c.restore();
+      if (o.kind === 'blade') drawFx(c, 'blade', x, y, 30, fxFrame('blade', this.time * 3 + o.ang), o.ang * 2);
+      else drawFx(c, 'scytheorb', x, y, 42, fxFrame('scytheorb', this.time * 2 + o.ang), o.ang * 1.5);
     }
 
     /* aura rings */
     for (const s of this.weapons) {
       if (s.id === 'aura') {
         const R = 90 * s.area;
-        c.globalAlpha = 0.12 + Math.sin(this.time * 5) * 0.04;
-        c.fillStyle = '#ffc258';
+        c.globalAlpha = 0.10 + Math.sin(this.time * 5) * 0.03;
+        const ag = c.createRadialGradient(this.px, this.py, R * 0.2, this.px, this.py, R);
+        ag.addColorStop(0, 'rgba(255,194,88,0)');
+        ag.addColorStop(1, 'rgba(255,194,88,0.55)');
+        c.fillStyle = ag;
         c.beginPath(); c.arc(this.px, this.py, R, 0, Math.PI * 2); c.fill();
-        c.globalAlpha = 0.8;
-        c.strokeStyle = '#ffc258';
-        c.lineWidth = 3;
-        c.setLineDash([14, 10]);
-        c.lineDashOffset = -this.time * 60;
-        c.beginPath(); c.arc(this.px, this.py, R, 0, Math.PI * 2); c.stroke();
-        c.setLineDash([]);
         c.globalAlpha = 1;
+        drawFx(c, 'auraring', this.px, this.py, R * 2.05, fxFrame('auraring', this.time * 1.5), 0, 0.8);
       }
       if (s.mods.has('ring') && s.id !== 'aura') {
         const R = 100 * s.area;
@@ -2006,64 +2090,81 @@ export class GloomfallEngine {
       const s = this.weapons[this.spinSlot];
       if (s) {
         const R = 100 * s.area;
-        c.globalAlpha = 0.2;
+        c.globalAlpha = 0.16;
         c.fillStyle = '#e6404f';
         c.beginPath(); c.arc(this.px, this.py, R, 0, Math.PI * 2); c.fill();
-        c.globalAlpha = 0.8;
-        c.strokeStyle = '#e6404f';
-        c.lineWidth = 4;
-        for (let k = 0; k < 3; k++) {
-          const a0 = this.time * 14 + (k * Math.PI * 2) / 3;
-          c.beginPath();
-          c.arc(this.px, this.py, R * (0.5 + k * 0.22), a0, a0 + 1.6);
-          c.stroke();
-        }
         c.globalAlpha = 1;
+        drawFx(c, 'whirl', this.px, this.py, R * 2.15, fxFrame('whirl', this.time * 4), 0, 0.85);
       }
     }
 
     /* projectiles */
     for (const p of this.projs) this.drawProj(c, p);
 
-    /* lightning arcs */
+    /* lightning arcs — jagged, glowing */
     for (const a of this.arcs) {
-      c.globalAlpha = a.t / 0.22;
+      const al = a.t / 0.22;
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      c.globalAlpha = al;
+      const segs = 5;
+      const pts: [number, number][] = [[a.x1, a.y1]];
+      for (let i = 1; i < segs; i++) {
+        const t = i / segs;
+        pts.push([
+          a.x1 + (a.x2 - a.x1) * t + rand(-13, 13),
+          a.y1 + (a.y2 - a.y1) * t + rand(-13, 13),
+        ]);
+      }
+      pts.push([a.x2, a.y2]);
       c.strokeStyle = a.color;
-      c.lineWidth = 3;
+      c.lineWidth = 5;
+      c.lineJoin = 'round';
       c.beginPath();
-      const mx = (a.x1 + a.x2) / 2 + rand(-14, 14);
-      const my = (a.y1 + a.y2) / 2 + rand(-14, 14);
-      c.moveTo(a.x1, a.y1);
-      c.lineTo(mx, my);
-      c.lineTo(a.x2, a.y2);
+      c.moveTo(pts[0][0], pts[0][1]);
+      for (const [qx, qy] of pts) c.lineTo(qx, qy);
       c.stroke();
-      c.globalAlpha = 1;
+      c.strokeStyle = '#ffffff';
+      c.lineWidth = 2;
+      c.stroke();
+      c.restore();
     }
 
     /* enemy bullets */
     for (const b of this.ebullets) {
+      const g = c.createRadialGradient(b.x, b.y, 1, b.x, b.y, b.r + 5);
+      g.addColorStop(0, '#ffffff');
+      g.addColorStop(0.4, b.color);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      c.fillStyle = g;
+      c.beginPath();
+      c.arc(b.x, b.y, b.r + 5, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
       c.fillStyle = b.color;
       c.strokeStyle = '#120a1c';
       c.lineWidth = 2;
       c.beginPath();
       c.arc(b.x, b.y, b.r, 0, Math.PI * 2);
-      c.fill(); c.stroke();
-      c.fillStyle = 'rgba(255,255,255,0.55)';
-      c.beginPath();
-      c.arc(b.x - 2, b.y - 2, b.r * 0.35, 0, Math.PI * 2);
       c.fill();
+      c.stroke();
     }
 
     /* particles */
     for (const p of this.particles) {
       const t = p.life / p.maxLife;
-      if (p.kind === 'ring') {
+      if (p.kind === 'sprite' && p.spr) {
+        drawFx(c, p.spr, p.x, p.y, p.size * (0.5 + t * 0.6), 1 - t, p.rot ?? 0, Math.min(1, t * 2));
+      } else if (p.kind === 'ring') {
         c.globalAlpha = t;
         c.strokeStyle = p.color;
         c.lineWidth = 5 * t + 1;
         c.beginPath();
         c.arc(p.x, p.y, p.size * (1.6 - t * 0.6), 0, Math.PI * 2);
         c.stroke();
+        c.globalAlpha = 1;
       } else {
         c.globalAlpha = t;
         c.fillStyle = p.color;
@@ -2078,11 +2179,12 @@ export class GloomfallEngine {
           c.arc(p.x, p.y, p.size * t + 0.5, 0, Math.PI * 2);
           c.fill();
         }
+        c.globalAlpha = 1;
       }
     }
     c.globalAlpha = 1;
 
-    /* beams over entities */
+    /* beams & pillars over entities */
     for (const h of this.hazards) {
       if (h.kind === 'beam') {
         const ex = h.x + Math.cos(h.ang) * h.r;
@@ -2090,24 +2192,19 @@ export class GloomfallEngine {
         const g = c.createLinearGradient(h.x, h.y, ex, ey);
         g.addColorStop(0, h.color);
         g.addColorStop(1, 'rgba(255,255,255,0)');
-        c.globalAlpha = 0.85;
+        c.save();
+        c.globalCompositeOperation = 'lighter';
+        c.globalAlpha = 0.8;
         c.strokeStyle = g;
         c.lineWidth = 16;
         c.lineCap = 'round';
         c.beginPath(); c.moveTo(h.x, h.y); c.lineTo(ex, ey); c.stroke();
         c.lineWidth = 6;
         c.strokeStyle = '#ffffff';
-        c.globalAlpha = 0.7;
         c.beginPath(); c.moveTo(h.x, h.y); c.lineTo(ex, ey); c.stroke();
-        c.globalAlpha = 1;
+        c.restore();
       } else if (h.kind === 'pillar') {
-        const a = clamp(h.t / 0.5, 0, 1);
-        c.globalAlpha = 1 - a;
-        c.fillStyle = h.color;
-        c.fillRect(h.x - h.r * 0.4, h.y - 700 * (1 - a * 0.3), h.r * 0.8, 700);
-        c.globalAlpha = (1 - a) * 0.5;
-        c.fillRect(h.x - h.r, h.y - 700, h.r * 2, 700);
-        c.globalAlpha = 1;
+        drawFx(c, 'pillar', h.x, h.y, h.r * 2.6, clamp(h.t / h.dur, 0, 1));
       }
     }
 
@@ -2142,12 +2239,41 @@ export class GloomfallEngine {
 
     c.restore();
 
-    /* vignette + flashes */
+    /* fog layers */
+    this.drawFog(c);
+    /* dynamic lights */
+    this.drawLights(c, ox, oy);
+    /* cathedral light streaks */
+    c.save();
+    c.globalCompositeOperation = 'screen';
+    c.rotate(-0.42);
+    for (let i = 0; i < 3; i++) {
+      const bx = ((i * 480 - this.cam.x * 0.08 + this.time * 6) % (this.W + 900)) - 450;
+      const lg = c.createLinearGradient(bx, 0, bx + 200, 0);
+      lg.addColorStop(0, 'rgba(255,214,150,0)');
+      lg.addColorStop(0.5, 'rgba(255,214,150,0.045)');
+      lg.addColorStop(1, 'rgba(255,214,150,0)');
+      c.fillStyle = lg;
+      c.fillRect(bx, -this.H, 200, this.H * 3);
+    }
+    c.restore();
+
+    /* vignette */
     const vg = c.createRadialGradient(this.W / 2, this.H / 2, Math.min(this.W, this.H) * 0.35, this.W / 2, this.H / 2, Math.max(this.W, this.H) * 0.72);
     vg.addColorStop(0, 'rgba(0,0,0,0)');
-    vg.addColorStop(1, 'rgba(5,2,12,0.62)');
+    vg.addColorStop(1, 'rgba(5,2,12,0.66)');
     c.fillStyle = vg;
     c.fillRect(0, 0, this.W, this.H);
+
+    /* color grade */
+    c.save();
+    c.globalCompositeOperation = 'overlay';
+    const cg = c.createLinearGradient(0, 0, 0, this.H);
+    cg.addColorStop(0, 'rgba(96,64,180,0.10)');
+    cg.addColorStop(1, 'rgba(255,150,70,0.08)');
+    c.fillStyle = cg;
+    c.fillRect(0, 0, this.W, this.H);
+    c.restore();
 
     if (this.redFlash > 0) {
       c.globalAlpha = this.redFlash * 0.35;
@@ -2175,62 +2301,130 @@ export class GloomfallEngine {
     }
   }
 
-  private drawFloor(c: CanvasRenderingContext2D, ox: number, oy: number) {
-    const T = 72;
-    const x0 = Math.floor(-ox / T) - 1;
-    const y0 = Math.floor(-oy / T) - 1;
-    const x1 = Math.ceil((this.W - ox) / T) + 1;
-    const y1 = Math.ceil((this.H - oy) / T) + 1;
+  private drawGround(c: CanvasRenderingContext2D, ox: number, oy: number) {
+    const tile = getTileCanvas();
+    if (!tile) return;
+    const x0 = Math.floor(-ox / TILE) - 1;
+    const y0 = Math.floor(-oy / TILE) - 1;
+    const x1 = Math.ceil((this.W - ox) / TILE) + 1;
+    const y1 = Math.ceil((this.H - oy) / TILE) + 1;
+    /* props behind tiles? props sit on top of tiles but below entities: draw tiles then props */
     for (let ty = y0; ty <= y1; ty++) {
       for (let tx = x0; tx <= x1; tx++) {
-        const h = hash2(tx, ty);
-        const px = tx * T + ox;
-        const py = ty * T + oy;
-        c.fillStyle = h < 0.12 ? '#1d1330' : h < 0.2 ? '#17102a' : '#191026';
-        c.fillRect(px, py, T, T);
-        if (h > 0.93) {
-          c.strokeStyle = 'rgba(77,47,107,0.5)';
-          c.lineWidth = 2;
-          c.beginPath();
-          const cx = px + T * hash2(tx + 7, ty);
-          const cy = py + T * hash2(tx, ty + 7);
-          c.moveTo(cx - 12, cy - 8);
-          c.lineTo(cx + 4, cy + 2);
-          c.lineTo(cx + 14, cy + 12);
-          c.stroke();
-        } else if (h > 0.905) {
-          /* bones */
-          c.strokeStyle = 'rgba(216,198,154,0.4)';
-          c.lineWidth = 3;
-          c.beginPath();
-          c.arc(px + T * 0.5, py + T * 0.5, 6, 0.4, 2.7);
-          c.stroke();
-        } else if (h > 0.885) {
-          /* glowing mushroom */
-          const gx = px + T * 0.5, gy = py + T * 0.5;
-          c.fillStyle = `rgba(192,123,255,${0.25 + Math.sin(this.time * 2 + tx * 3 + ty) * 0.12})`;
-          c.beginPath();
-          c.arc(gx, gy, 4, 0, Math.PI * 2);
-          c.fill();
-          c.fillStyle = 'rgba(192,123,255,0.1)';
-          c.beginPath();
-          c.arc(gx, gy, 11, 0, Math.PI * 2);
-          c.fill();
-        }
+        const v = tileVariant(tx, ty);
+        c.drawImage(tile, v * TILE, 0, TILE, TILE, tx * TILE + ox, ty * TILE + oy, TILE, TILE);
       }
     }
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        const pr = propAt(tx, ty);
+        if (!pr) continue;
+        const pd = getProp(pr.kind);
+        if (!pd) continue;
+        const px = tx * TILE + ox + TILE / 2 + pr.dx;
+        const py = ty * TILE + oy + TILE / 2 + pr.dy;
+        c.save();
+        c.translate(px, py);
+        c.scale(pr.flip ? -pr.s : pr.s, pr.s);
+        c.drawImage(pd.canvas, -pd.canvas.width / 2, -pd.canvas.height / 2);
+        c.restore();
+      }
+    }
+  }
+
+  private drawFog(c: CanvasRenderingContext2D) {
+    const fogs = getFogs();
+    for (let i = 0; i < fogs.length; i++) {
+      const f = fogs[i];
+      const speed = 10 + i * 7;
+      const par = 0.3 + i * 0.18;
+      const span = this.W + 960;
+      for (let k = 0; k < 3; k++) {
+        const base = k * (span / 3) + i * 210;
+        const sx = (((base + this.time * speed - this.cam.x * par) % span) + span) % span - 480;
+        const sy = this.H * (0.16 + i * 0.3) + Math.sin(this.time * 0.13 + i * 2 + k) * 46 + k * 30;
+        c.globalAlpha = 0.75;
+        c.drawImage(f, sx, sy, 960, 480);
+      }
+    }
+    c.globalAlpha = 1;
+  }
+
+  private drawLights(c: CanvasRenderingContext2D, ox: number, oy: number) {
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    const flick = Math.sin(this.time * 13) * 0.5 + Math.sin(this.time * 7.3) * 0.5;
+    /* player torch */
+    const pr = 250 + flick * 12;
+    let g = c.createRadialGradient(this.px + ox, this.py + oy, 10, this.px + ox, this.py + oy, pr);
+    g.addColorStop(0, `rgba(255,176,88,${0.13 + flick * 0.02})`);
+    g.addColorStop(1, 'rgba(255,120,40,0)');
+    c.fillStyle = g;
+    c.beginPath();
+    c.arc(this.px + ox, this.py + oy, pr, 0, Math.PI * 2);
+    c.fill();
+    /* fire pools */
+    for (const h of this.hazards) {
+      if (h.kind === 'pool' && h.owner === 'p') {
+        const hg = c.createRadialGradient(h.x + ox, h.y + oy, 4, h.x + ox, h.y + oy, h.r * 1.5);
+        hg.addColorStop(0, 'rgba(255,150,60,0.14)');
+        hg.addColorStop(1, 'rgba(255,120,40,0)');
+        c.fillStyle = hg;
+        c.beginPath();
+        c.arc(h.x + ox, h.y + oy, h.r * 1.5, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+    /* boss auras */
+    for (const e of this.enemies) {
+      if (e.bossIdx >= 0 && !e.dead) {
+        const bg = c.createRadialGradient(e.x + ox, e.y + oy, 10, e.x + ox, e.y + oy, e.r * 4);
+        bg.addColorStop(0, `${e.def.color}33`);
+        bg.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = bg;
+        c.beginPath();
+        c.arc(e.x + ox, e.y + oy, e.r * 4, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+    /* glowing props */
+    const x0 = Math.floor(-ox / TILE) - 1;
+    const y0 = Math.floor(-oy / TILE) - 1;
+    const x1 = Math.ceil((this.W - ox) / TILE) + 1;
+    const y1 = Math.ceil((this.H - oy) / TILE) + 1;
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        const pr = propAt(tx, ty);
+        if (!pr || (pr.kind !== 'mushroom' && pr.kind !== 'candle')) continue;
+        const px = tx * TILE + ox + TILE / 2 + pr.dx;
+        const py = ty * TILE + oy + TILE / 2 + pr.dy;
+        const col = pr.kind === 'mushroom' ? '192,123,255' : '255,190,90';
+        const fl = Math.sin(this.time * 9 + tx * 3 + ty * 5) * 0.03;
+        const lg = c.createRadialGradient(px, py, 2, px, py, 70);
+        lg.addColorStop(0, `rgba(${col},${0.13 + fl})`);
+        lg.addColorStop(1, `rgba(${col},0)`);
+        c.fillStyle = lg;
+        c.beginPath();
+        c.arc(px, py, 70, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+    c.restore();
   }
 
   private drawHazardsUnder(c: CanvasRenderingContext2D) {
     for (const h of this.hazards) {
       if (h.kind === 'pool') {
         const a = clamp(1 - h.t / h.dur, 0, 1);
-        c.globalAlpha = 0.4 * a + 0.1;
-        c.fillStyle = h.color;
+        c.globalAlpha = 0.42 * a + 0.1;
+        const g = c.createRadialGradient(h.x, h.y, 2, h.x, h.y, h.r);
+        g.addColorStop(0, h.color);
+        g.addColorStop(1, 'rgba(0,0,0,0)');
+        c.fillStyle = g;
         c.beginPath();
         c.ellipse(h.x, h.y, h.r, h.r * 0.72, 0, 0, Math.PI * 2);
         c.fill();
-        c.globalAlpha = 0.7 * a;
+        c.globalAlpha = 0.65 * a;
         c.strokeStyle = h.color;
         c.lineWidth = 2.5;
         c.beginPath();
@@ -2239,13 +2433,17 @@ export class GloomfallEngine {
         c.globalAlpha = 1;
       } else if (h.kind === 'warnc') {
         const p = clamp(h.t / 0.8, 0, 1);
-        c.globalAlpha = 0.25 + Math.sin(this.time * 16) * 0.12;
+        c.globalAlpha = 0.22 + Math.sin(this.time * 16) * 0.1;
         c.fillStyle = h.color;
         c.beginPath(); c.arc(h.x, h.y, h.r, 0, Math.PI * 2); c.fill();
         c.globalAlpha = 0.9;
         c.strokeStyle = h.color;
         c.lineWidth = 3;
         c.beginPath(); c.arc(h.x, h.y, h.r * (1 - p * 0.5), 0, Math.PI * 2); c.stroke();
+        if (h.owner === 'p') {
+          /* incoming meteor shadow */
+          drawFx(c, 'meteor', h.x, h.y - 220 * (1 - p), 60, fxFrame('meteor', this.time * 2), 0, p);
+        }
         c.globalAlpha = 1;
       }
     }
@@ -2254,489 +2452,125 @@ export class GloomfallEngine {
   private drawPickup(c: CanvasRenderingContext2D, p: Pickup) {
     const bob = Math.sin(p.t * 5 + p.x) * 3;
     if (p.kind === 'xp') {
-      const col = p.v >= 30 ? '#ffc258' : p.v >= 15 ? '#c07bff' : p.v >= 5 ? '#7fd4e8' : '#9be85e';
-      const r = p.v >= 30 ? 9 : p.v >= 15 ? 8 : p.v >= 5 ? 6.5 : 5;
-      c.save();
-      c.translate(p.x, p.y + bob);
-      c.rotate(p.t * 2);
-      c.fillStyle = col;
-      c.strokeStyle = '#120a1c';
-      c.lineWidth = 2;
-      c.beginPath();
-      for (let i = 0; i < 4; i++) {
-        const a = (i / 4) * Math.PI * 2;
-        c.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-        c.lineTo(Math.cos(a + Math.PI / 4) * r * 0.45, Math.sin(a + Math.PI / 4) * r * 0.45);
-      }
-      c.closePath();
-      c.fill(); c.stroke();
-      c.restore();
+      const spr = p.v >= 30 ? 'soul-gold' : p.v >= 15 ? 'soul-purple' : p.v >= 5 ? 'soul-blue' : 'soul-green';
+      const size = p.v >= 30 ? 30 : p.v >= 15 ? 27 : p.v >= 5 ? 23 : 19;
+      drawFx(c, spr, p.x, p.y + bob, size, fxFrame(spr, this.time + p.x * 0.1));
     } else if (p.kind === 'gold') {
-      c.save();
-      c.translate(p.x, p.y + bob);
-      c.fillStyle = '#ffc258';
-      c.strokeStyle = '#120a1c';
-      c.lineWidth = 2;
-      c.beginPath(); c.ellipse(0, 0, 7, 5.5, 0, 0, Math.PI * 2); c.fill(); c.stroke();
-      c.fillStyle = '#a5721d';
-      c.font = '900 8px Nunito';
-      c.textAlign = 'center';
-      c.fillText('$', 0, 3);
-      c.restore();
+      drawFx(c, 'coin', p.x, p.y + bob, 24, fxFrame('coin', this.time + p.y * 0.1));
     } else if (p.kind === 'heal') {
-      c.save();
-      c.translate(p.x, p.y + bob);
-      c.fillStyle = '#e6404f';
-      c.strokeStyle = '#120a1c';
-      c.lineWidth = 2;
-      c.beginPath();
-      c.arc(0, 0, 9, 0, Math.PI * 2);
-      c.fill(); c.stroke();
-      c.fillStyle = '#fff';
-      c.fillRect(-5, -1.5, 10, 3);
-      c.fillRect(-1.5, -5, 3, 10);
-      c.restore();
+      drawFx(c, 'heal', p.x, p.y + bob, 28, fxFrame('heal', this.time));
     } else {
-      /* chest */
-      c.save();
-      c.translate(p.x, p.y + bob);
-      c.rotate(Math.sin(p.t * 8) * 0.06);
-      c.fillStyle = '#8a5a2b';
-      c.strokeStyle = '#120a1c';
-      c.lineWidth = 2.5;
-      c.fillRect(-14, -10, 28, 20);
-      c.strokeRect(-14, -10, 28, 20);
-      c.fillStyle = '#b07a3d';
-      c.fillRect(-14, -10, 28, 8);
-      c.strokeRect(-14, -10, 28, 8);
-      c.fillStyle = '#ffc258';
-      c.fillRect(-4, -6, 8, 10);
-      c.strokeRect(-4, -6, 8, 10);
-      c.globalAlpha = 0.5 + Math.sin(p.t * 6) * 0.3;
-      c.strokeStyle = '#ffc258';
-      c.lineWidth = 2;
-      c.strokeRect(-18, -14, 36, 28);
-      c.globalAlpha = 1;
-      c.restore();
+      const wob = fxFrame('chest', p.t) * 0.3;
+      drawFx(c, 'chest', p.x, p.y + bob * 0.5, 46, wob);
     }
   }
 
   private drawProj(c: CanvasRenderingContext2D, p: Proj) {
-    c.save();
-    c.translate(p.x, p.y);
     if (p.kind === 'fire') {
-      const g = c.createRadialGradient(0, 0, 2, 0, 0, p.r + 6);
-      g.addColorStop(0, '#fff3c4');
-      g.addColorStop(0.5, '#ff8a3d');
-      g.addColorStop(1, 'rgba(230,64,79,0)');
-      c.fillStyle = g;
-      c.beginPath(); c.arc(0, 0, p.r + 6, 0, Math.PI * 2); c.fill();
-      c.fillStyle = '#ffc258';
-      c.strokeStyle = '#120a1c';
-      c.lineWidth = 2;
-      c.beginPath(); c.arc(0, 0, p.r * 0.75, 0, Math.PI * 2); c.fill(); c.stroke();
+      drawFx(c, 'fireball', p.x, p.y, p.r * 3.6, fxFrame('fireball', this.time * 2 + p.x * 0.02), Math.atan2(p.vy, p.vx));
     } else {
-      c.rotate(Math.atan2(p.vy, p.vx));
-      c.fillStyle = '#f4e8cf';
-      c.strokeStyle = '#120a1c';
-      c.lineWidth = 2;
-      c.beginPath();
-      c.moveTo(14, 0); c.lineTo(-10, -4.5); c.lineTo(-6, 0); c.lineTo(-10, 4.5);
-      c.closePath();
-      c.fill(); c.stroke();
+      drawFx(c, 'bonespear', p.x, p.y, p.r * 4.6, fxFrame('bonespear', this.time * 3 + p.y * 0.02), Math.atan2(p.vy, p.vx));
     }
-    c.restore();
   }
 
   private drawPlayer(c: CanvasRenderingContext2D) {
     const x = this.px, y = this.py;
-    const bob = this.moving ? Math.sin(this.walkT) * 2.4 : Math.sin(this.time * 2.5) * 1.4;
-    const cls = CLASSES[this.classId];
     c.save();
-    c.translate(x, y + bob);
-    if (this.iframe > 0 && Math.floor(this.time * 18) % 2 === 0) c.globalAlpha = 0.55;
     /* shadow */
-    c.fillStyle = 'rgba(0,0,0,0.35)';
+    c.fillStyle = 'rgba(0,0,0,0.4)';
     c.beginPath();
-    c.ellipse(0, 16 - bob, 14, 5.5, 0, 0, Math.PI * 2);
+    c.ellipse(x, y + 20, 15, 6, 0, 0, Math.PI * 2);
     c.fill();
-    /* cape */
-    c.fillStyle = cls.color;
-    c.strokeStyle = '#120a1c';
-    c.lineWidth = 2.5;
-    c.beginPath();
-    c.moveTo(-9, -6);
-    c.quadraticCurveTo(-13 - this.facing * 2, 10, -7 + Math.sin(this.walkT) * 2, 16);
-    c.lineTo(7 + Math.sin(this.walkT + 1) * 2, 16);
-    c.quadraticCurveTo(13, 8, 9, -6);
-    c.closePath();
-    c.fill(); c.stroke();
-    /* body */
-    c.fillStyle = '#3d2a55';
-    c.beginPath();
-    c.roundRect(-8, -6, 16, 18, 6);
-    c.fill(); c.stroke();
-    /* hood/head */
-    c.fillStyle = '#2a1a40';
-    c.beginPath();
-    c.arc(0, -10, 9.5, 0, Math.PI * 2);
-    c.fill(); c.stroke();
-    /* eyes */
-    c.fillStyle = cls.color;
-    c.beginPath();
-    c.arc(this.facing * 3 - 2.4, -10, 2, 0, Math.PI * 2);
-    c.arc(this.facing * 3 + 2.4, -10, 2, 0, Math.PI * 2);
-    c.fill();
+    let alpha = 1;
+    if (this.iframe > 0 && Math.floor(this.time * 18) % 2 === 0) alpha = 0.55;
+    this.panim.draw(c, x, y + 4, 1.06, this.facing < 0, alpha);
     c.restore();
   }
 
   private drawEnemy(c: CanvasRenderingContext2D, e: Enemy) {
-    const t = this.time + e.seed;
-    const x = e.x, y = e.y;
-    if (e.skin === 'ghoul' && e.ai.state === 0) {
-      /* burrowed: dust mound */
-      c.fillStyle = 'rgba(138,115,85,0.7)';
-      c.beginPath();
-      c.ellipse(x, y, e.r, e.r * 0.5, 0, Math.PI, 0);
-      c.fill();
-      return;
-    }
-    const wob = Math.sin(t * (e.speed / 9)) * 0.08;
-    c.save();
-    c.translate(x, y);
-    /* shadow */
-    c.fillStyle = 'rgba(0,0,0,0.35)';
-    c.beginPath();
-    c.ellipse(0, e.r * 0.85, e.r * 0.9, e.r * 0.32, 0, 0, Math.PI * 2);
-    c.fill();
-    if (e.elite) {
-      c.strokeStyle = '#ffc258';
-      c.lineWidth = 3;
-      c.globalAlpha = 0.7 + Math.sin(t * 6) * 0.3;
-      c.beginPath(); c.arc(0, 0, e.r + 6, 0, Math.PI * 2); c.stroke();
-      c.globalAlpha = 1;
-    }
-    c.rotate(wob * (e.bossIdx >= 0 ? 0.3 : 1));
-    const body = (col: string, rMul = 1) => {
-      c.fillStyle = col;
-      c.strokeStyle = '#120a1c';
-      c.lineWidth = e.r > 20 ? 3.4 : 2.4;
-      c.beginPath();
-      c.arc(0, 0, e.r * rMul, 0, Math.PI * 2);
-      c.fill(); c.stroke();
-    };
-    const eyes = (dx: number, dy: number, col = '#ffdd55', r = Math.max(2, e.r * 0.16)) => {
-      c.fillStyle = col;
-      c.beginPath();
-      c.arc(-dx, dy, r, 0, Math.PI * 2);
-      c.arc(dx, dy, r, 0, Math.PI * 2);
-      c.fill();
-      c.fillStyle = '#120a1c';
-      c.beginPath();
-      c.arc(-dx, dy, r * 0.45, 0, Math.PI * 2);
-      c.arc(dx, dy, r * 0.45, 0, Math.PI * 2);
-      c.fill();
-    };
-    const horns = (col: string) => {
-      c.fillStyle = col;
-      c.strokeStyle = '#120a1c';
+    const x = e.x;
+    let y = e.y;
+    const isBoss = e.bossIdx >= 0;
+    let alpha = 1;
+    let sink = 0;
+
+    /* burrowed ghoul */
+    if (e.skin === 'ghoul' && !e.dead && e.ai.state < 2) {
+      c.fillStyle = 'rgba(138,115,85,0.75)';
+      c.strokeStyle = 'rgba(24,10,34,0.8)';
       c.lineWidth = 2;
       c.beginPath();
-      c.moveTo(-e.r * 0.55, -e.r * 0.7); c.lineTo(-e.r * 0.85, -e.r * 1.25); c.lineTo(-e.r * 0.3, -e.r * 0.9);
-      c.closePath(); c.fill(); c.stroke();
-      c.beginPath();
-      c.moveTo(e.r * 0.55, -e.r * 0.7); c.lineTo(e.r * 0.85, -e.r * 1.25); c.lineTo(e.r * 0.3, -e.r * 0.9);
-      c.closePath(); c.fill(); c.stroke();
-    };
+      c.ellipse(x, y + e.r * 0.3, e.r * 1.1, e.r * 0.55, 0, Math.PI, 0);
+      c.fill();
+      c.stroke();
+      return;
+    }
 
-    switch (e.skin) {
-      case 'risen': {
-        body('#7cb356');
-        eyes(e.r * 0.3, -e.r * 0.15, '#e8ff9b');
-        c.strokeStyle = '#120a1c'; c.lineWidth = 2;
-        c.beginPath(); c.arc(0, e.r * 0.3, e.r * 0.3, 0.3, Math.PI - 0.3); c.stroke();
-        break;
-      }
-      case 'clatter': {
-        body('#e8e0cc');
-        c.fillStyle = '#120a1c';
-        c.beginPath();
-        c.arc(-e.r * 0.3, -e.r * 0.1, e.r * 0.22, 0, Math.PI * 2);
-        c.arc(e.r * 0.3, -e.r * 0.1, e.r * 0.22, 0, Math.PI * 2);
-        c.fill();
-        c.fillRect(-e.r * 0.35, e.r * 0.3, e.r * 0.7, e.r * 0.16);
-        break;
-      }
-      case 'imp': {
-        body('#ff9d4d');
-        horns('#c96a2b');
-        eyes(e.r * 0.3, -e.r * 0.1, '#fff2b0');
-        break;
-      }
-      case 'bat': {
-        const flap = Math.sin(t * 22) * 0.7;
-        c.fillStyle = '#9b7bd8';
-        c.strokeStyle = '#120a1c';
-        c.lineWidth = 2;
-        for (const s of [-1, 1]) {
-          c.save();
-          c.scale(s, 1);
-          c.rotate(flap * s);
-          c.beginPath();
-          c.moveTo(0, 0);
-          c.quadraticCurveTo(e.r * 1.6, -e.r * 1.2, e.r * 2, 0);
-          c.quadraticCurveTo(e.r * 1.2, e.r * 0.2, 0, e.r * 0.4);
-          c.closePath();
-          c.fill(); c.stroke();
-          c.restore();
-        }
-        body('#7a5bb0', 0.8);
-        eyes(e.r * 0.25, -e.r * 0.1, '#ff6b7d', 2.4);
-        break;
-      }
-      case 'spitter': {
-        body('#a4d94e');
-        c.fillStyle = '#6f9c2f';
-        for (let i = 0; i < 4; i++) {
-          c.beginPath();
-          c.arc(Math.cos(i * 1.7 + e.seed) * e.r * 0.5, Math.sin(i * 1.7 + e.seed) * e.r * 0.5 - e.r * 0.15, e.r * 0.16, 0, Math.PI * 2);
-          c.fill();
-        }
-        eyes(e.r * 0.3, -e.r * 0.2, '#fff');
-        const open = e.ai.state === 1 ? 0.5 : 0.15;
-        c.fillStyle = '#3d5c14';
-        c.beginPath(); c.arc(0, e.r * 0.35, e.r * open, 0, Math.PI * 2); c.fill();
-        break;
-      }
-      case 'goatkin': {
-        body('#c9803f');
-        horns('#e8e0cc');
-        eyes(e.r * 0.3, -e.r * 0.15, '#ffe14d');
-        if (e.ai.state === 1) {
-          c.strokeStyle = '#e6404f';
-          c.lineWidth = 2;
-          c.beginPath(); c.arc(0, 0, e.r + 5 + Math.sin(t * 30) * 2, 0, Math.PI * 2); c.stroke();
-        }
-        break;
-      }
-      case 'archer': {
-        body('#d8cfae');
-        c.fillStyle = '#120a1c';
-        c.beginPath();
-        c.arc(-e.r * 0.28, -e.r * 0.12, e.r * 0.18, 0, Math.PI * 2);
-        c.arc(e.r * 0.28, -e.r * 0.12, e.r * 0.18, 0, Math.PI * 2);
-        c.fill();
-        c.strokeStyle = '#8a6a3d';
-        c.lineWidth = 2.6;
-        c.beginPath(); c.arc(e.r * 0.9, 0, e.r * 0.8, -1.1, 1.1); c.stroke();
-        break;
-      }
-      case 'wraith': {
-        c.globalAlpha = e.ai.state === 1 ? 0.55 : 0.85;
-        body('#9fd8e8');
-        c.fillStyle = '#120a1c';
-        c.beginPath();
-        c.ellipse(-e.r * 0.3, -e.r * 0.1, e.r * 0.16, e.r * 0.26, 0, 0, Math.PI * 2);
-        c.ellipse(e.r * 0.3, -e.r * 0.1, e.r * 0.16, e.r * 0.26, 0, 0, Math.PI * 2);
-        c.fill();
-        c.beginPath();
-        for (let i = 0; i < 4; i++) {
-          const bx = -e.r * 0.7 + i * e.r * 0.47;
-          c.moveTo(bx, e.r * 0.6);
-          c.quadraticCurveTo(bx + e.r * 0.2, e.r * (1.1 + Math.sin(t * 8 + i) * 0.15), bx + e.r * 0.45, e.r * 0.6);
-        }
-        c.fillStyle = '#9fd8e8';
-        c.fill();
-        c.globalAlpha = 1;
-        break;
-      }
-      case 'brute': {
-        body('#d95f4d');
-        horns('#8c3a2e');
-        eyes(e.r * 0.32, -e.r * 0.2, '#ffd23d', e.r * 0.13);
-        c.fillStyle = '#8c3a2e';
-        c.beginPath();
-        c.arc(-e.r * 0.95, e.r * 0.25, e.r * 0.32, 0, Math.PI * 2);
-        c.arc(e.r * 0.95, e.r * 0.25, e.r * 0.32, 0, Math.PI * 2);
-        c.fill();
-        c.strokeStyle = '#120a1c'; c.lineWidth = 2.4; c.stroke();
-        if (e.ai.state === 1) {
-          c.globalAlpha = 0.4 + Math.sin(t * 20) * 0.2;
-          c.strokeStyle = '#e6404f';
-          c.beginPath(); c.arc(0, 0, e.r + 8, 0, Math.PI * 2); c.stroke();
-          c.globalAlpha = 1;
-        }
-        break;
-      }
-      case 'shieldkin': {
-        body('#8fa3b8');
-        eyes(e.r * 0.28, -e.r * 0.15, '#ffd23d');
-        c.save();
-        c.rotate(e.ai.ang);
-        c.fillStyle = '#5c6b7d';
-        c.strokeStyle = '#120a1c';
-        c.lineWidth = 2.4;
-        c.beginPath();
-        c.roundRect(e.r * 0.7, -e.r * 0.75, e.r * 0.4, e.r * 1.5, 4);
-        c.fill(); c.stroke();
-        c.fillStyle = '#3d4a59';
-        c.beginPath(); c.arc(e.r * 0.9, 0, e.r * 0.18, 0, Math.PI * 2); c.fill();
-        c.restore();
-        break;
-      }
-      case 'hexer': {
-        c.fillStyle = '#5c3d8f';
-        c.strokeStyle = '#120a1c';
-        c.lineWidth = 2.4;
-        c.beginPath();
-        c.moveTo(0, -e.r * 1.25);
-        c.quadraticCurveTo(e.r * 1.05, -e.r * 0.3, e.r * 0.8, e.r * 0.85);
-        c.lineTo(-e.r * 0.8, e.r * 0.85);
-        c.quadraticCurveTo(-e.r * 1.05, -e.r * 0.3, 0, -e.r * 1.25);
-        c.fill(); c.stroke();
-        c.fillStyle = '#c07bff';
-        c.beginPath();
-        c.arc(-e.r * 0.25, -e.r * 0.25, e.r * 0.13, 0, Math.PI * 2);
-        c.arc(e.r * 0.25, -e.r * 0.25, e.r * 0.13, 0, Math.PI * 2);
-        c.fill();
-        c.strokeStyle = '#8a6a3d';
-        c.lineWidth = 3;
-        c.beginPath(); c.moveTo(e.r * 0.9, e.r * 0.7); c.lineTo(e.r * 1.05, -e.r * 0.9); c.stroke();
-        c.fillStyle = `rgba(192,123,255,${0.6 + Math.sin(t * 6) * 0.4})`;
-        c.beginPath(); c.arc(e.r * 1.05, -e.r * 1.05, e.r * 0.22, 0, Math.PI * 2); c.fill();
-        break;
-      }
-      case 'ghoul': {
-        body('#c9a86b');
-        c.fillStyle = '#120a1c';
-        c.beginPath();
-        c.arc(-e.r * 0.3, -e.r * 0.2, e.r * 0.17, 0, Math.PI * 2);
-        c.arc(e.r * 0.3, -e.r * 0.2, e.r * 0.17, 0, Math.PI * 2);
-        c.fill();
-        c.strokeStyle = '#120a1c'; c.lineWidth = 2;
-        c.beginPath();
-        c.moveTo(-e.r * 0.3, e.r * 0.25);
-        c.lineTo(-e.r * 0.15, e.r * 0.4);
-        c.lineTo(0, e.r * 0.25);
-        c.lineTo(e.r * 0.15, e.r * 0.4);
-        c.lineTo(e.r * 0.3, e.r * 0.25);
-        c.stroke();
-        if (e.ai.state === 1) {
-          c.strokeStyle = '#c9a86b';
-          c.lineWidth = 3;
-          c.beginPath(); c.arc(0, 0, e.r + 6, 0, Math.PI * 2); c.stroke();
-        }
-        break;
-      }
-      case 'goblin': {
-        body('#ffd23d', 0.9);
-        c.fillStyle = '#3daa56';
-        c.beginPath(); c.arc(0, -e.r * 0.2, e.r * 0.62, 0, Math.PI * 2); c.fill();
-        c.strokeStyle = '#120a1c'; c.lineWidth = 2; c.stroke();
-        eyes(e.r * 0.25, -e.r * 0.25, '#fff', e.r * 0.17);
-        c.fillStyle = '#8a5a2b';
-        c.beginPath(); c.arc(-e.r * 0.7, -e.r * 0.1, e.r * 0.4, 0, Math.PI * 2); c.fill(); c.stroke();
-        break;
-      }
-      case 'butcher': {
-        body('#e05a6a');
-        horns('#8c2f3d');
-        eyes(e.r * 0.3, -e.r * 0.15, '#ffd23d', e.r * 0.13);
-        c.strokeStyle = '#8c2f3d'; c.lineWidth = 3;
-        c.beginPath(); c.arc(0, e.r * 0.25, e.r * 0.4, 0.2, Math.PI - 0.2); c.stroke();
-        c.fillStyle = '#c9d4e4';
-        c.beginPath();
-        c.roundRect(e.r * 0.8, -e.r * 0.3, e.r * 0.6, e.r * 0.16, 3);
-        c.fill();
-        c.strokeStyle = '#120a1c'; c.lineWidth = 2; c.stroke();
-        break;
-      }
-      case 'andariel': {
-        body('#8fd94e');
-        c.strokeStyle = '#4d7d24';
-        c.lineWidth = 3.4;
-        for (let i = 0; i < 7; i++) {
-          const a = -Math.PI / 2 + (i - 3) * 0.32;
-          c.beginPath();
-          c.moveTo(Math.cos(a) * e.r * 0.8, Math.sin(a) * e.r * 0.8);
-          c.lineTo(Math.cos(a) * e.r * 1.5, Math.sin(a) * e.r * 1.5);
-          c.stroke();
-        }
-        eyes(e.r * 0.28, -e.r * 0.15, '#e8ffb0', e.r * 0.12);
-        break;
-      }
-      case 'baal': {
-        body('#7fd4e8');
-        horns('#e8f6ff');
-        eyes(e.r * 0.3, -e.r * 0.15, '#0f4c5c', e.r * 0.13);
-        c.globalAlpha = 0.4;
-        c.strokeStyle = '#e8f6ff';
-        c.lineWidth = 2.5;
-        c.beginPath(); c.arc(0, 0, e.r + 8 + Math.sin(t * 3) * 3, 0, Math.PI * 2); c.stroke();
-        c.globalAlpha = 1;
-        break;
-      }
-      case 'terrorlord': {
-        body('#c04de0');
-        c.fillStyle = '#7d1fa0';
-        c.strokeStyle = '#120a1c';
-        c.lineWidth = 2.4;
-        for (let i = 0; i < 5; i++) {
-          const a = -Math.PI / 2 + (i - 2) * 0.5;
-          c.beginPath();
-          c.moveTo(Math.cos(a - 0.16) * e.r * 0.9, Math.sin(a - 0.16) * e.r * 0.9);
-          c.lineTo(Math.cos(a) * e.r * 1.45, Math.sin(a) * e.r * 1.45);
-          c.lineTo(Math.cos(a + 0.16) * e.r * 0.9, Math.sin(a + 0.16) * e.r * 0.9);
-          c.closePath();
-          c.fill(); c.stroke();
-        }
-        c.fillStyle = '#ff3d3d';
-        c.beginPath();
-        c.ellipse(-e.r * 0.3, -e.r * 0.15, e.r * 0.16, e.r * 0.1, -0.3, 0, Math.PI * 2);
-        c.ellipse(e.r * 0.3, -e.r * 0.15, e.r * 0.16, e.r * 0.1, 0.3, 0, Math.PI * 2);
-        c.fill();
-        c.globalAlpha = 0.5 + Math.sin(t * 4) * 0.2;
-        c.strokeStyle = '#ff3d3d';
-        c.lineWidth = 3;
-        c.beginPath(); c.arc(0, 0, e.r + 10, 0, Math.PI * 2); c.stroke();
-        c.globalAlpha = 1;
-        break;
-      }
+    if (e.dead) {
+      const dur = isBoss ? 1.15 : 0.62;
+      const t = clamp(e.dying / dur, 0, 1);
+      alpha = 1 - t * t;
+      sink = t * 14;
+    }
+
+    /* shadow */
+    c.fillStyle = 'rgba(0,0,0,0.38)';
+    c.beginPath();
+    c.ellipse(x, y + e.r * 0.85, e.r * 0.95, e.r * 0.34, 0, 0, Math.PI * 2);
+    c.fill();
+
+    if (e.elite && !e.dead) {
+      c.strokeStyle = '#ffc258';
+      c.lineWidth = 3;
+      c.globalAlpha = 0.65 + Math.sin(this.time * 6 + e.seed) * 0.3;
+      c.beginPath(); c.arc(x, y, e.r + 7, 0, Math.PI * 2); c.stroke();
+      c.globalAlpha = 1;
+    }
+
+    const scale = (e.r / (SPR_R[e.skin] ?? 15)) * (1 + e.flash * 0.07);
+    e.anim.draw(c, x, y + sink + (e.anim.clipName === 'walk' ? 0 : 0), scale, e.face < 0, alpha);
+
+    /* slow tint */
+    if (e.slow > 0 && !e.dead) {
+      c.globalAlpha = 0.4;
+      c.strokeStyle = '#7fd4e8';
+      c.lineWidth = 2.5;
+      c.beginPath(); c.arc(x, y, e.r + 3, 0.5, 2.6); c.stroke();
+      c.globalAlpha = 1;
     }
 
     /* hit flash */
-    if (e.flash > 0) {
-      c.globalAlpha = e.flash * 0.75;
+    if (e.flash > 0 && !e.dead) {
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      c.globalAlpha = e.flash * 0.5;
       c.fillStyle = '#ffffff';
       c.beginPath();
-      c.arc(0, 0, e.r, 0, Math.PI * 2);
+      c.arc(x, y, e.r, 0, Math.PI * 2);
       c.fill();
-      c.globalAlpha = 1;
+      c.restore();
     }
-    c.restore();
 
-    /* elite/boss hp bar */
-    if ((e.elite || e.bossIdx >= 0) && e.hp < e.maxHp && e.bossIdx < 0) {
+    /* elite hp bar */
+    if (e.elite && !e.dead && e.hp < e.maxHp) {
       const w = e.r * 2;
       c.fillStyle = '#120a1c';
-      c.fillRect(x - w / 2, y - e.r - 12, w, 5);
+      c.fillRect(x - w / 2, y - e.r - 14, w, 5);
       c.fillStyle = '#e6404f';
-      c.fillRect(x - w / 2 + 1, y - e.r - 11, (w - 2) * clamp(e.hp / e.maxHp, 0, 1), 3);
+      c.fillRect(x - w / 2 + 1, y - e.r - 13, (w - 2) * clamp(e.hp / e.maxHp, 0, 1), 3);
+    }
+    /* boss telegraph ring while winding attacks */
+    if (isBoss && !e.dead && e.atk && ['charge', 'spin'].includes(e.atk.type) && e.atk.t < 0.55) {
+      c.globalAlpha = 0.5 + Math.sin(this.time * 18) * 0.25;
+      c.strokeStyle = '#e6404f';
+      c.lineWidth = 3.5;
+      c.beginPath(); c.arc(x, y, e.r + 12, 0, Math.PI * 2); c.stroke();
+      c.globalAlpha = 1;
     }
   }
 }
 
-/* deferred micro-tasks tied to engine lifetime */
-function setTimeout2(engine: GloomfallEngine, ms: number, fn: () => void) {
-  const t0 = performance.now();
-  const tick = () => {
-    if (performance.now() - t0 >= ms) fn();
-    else requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-  void engine;
-}
+/* deferred micro-tasks scheduled on game time */
+const deferred: { at: number; fn: () => void }[] = [];
 
-declare module './engine' {
-  interface Enemy { facingDir?: number }
-}
+export { isWeapon };

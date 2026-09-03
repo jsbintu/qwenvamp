@@ -1,1 +1,100 @@
 @import "tailwindcss";
+
+@theme {
+  --font-display: "Grenze Gotisch", "Georgia", serif;
+  --font-body: "Nunito", "Trebuchet MS", sans-serif;
+
+  --color-ink: #120a1c;
+  --color-abyss: #1a0f28;
+  --color-panel: #231234;
+  --color-panel2: #2f1b46;
+  --color-line: #4d2f6b;
+  --color-bone: #f4e8cf;
+  --color-parch: #d8c69a;
+  --color-fire: #ff8a3d;
+  --color-ember: #ffc258;
+  --color-blood: #e6404f;
+  --color-poison: #9be85e;
+  --color-arcane: #c07bff;
+  --color-frost: #7fd4e8;
+
+  --animate-ember: ember 7s linear infinite;
+  --animate-bob: bob 2.6s ease-in-out infinite;
+  --animate-cardin: cardin 0.45s cubic-bezier(0.2, 1.4, 0.4, 1) both;
+  --animate-bannerin: bannerin 3s cubic-bezier(0.2, 1, 0.3, 1) both;
+  --animate-fadein: fadein 0.35s ease both;
+  --animate-chestshake: chestshake 0.5s ease-in-out infinite;
+  --animate-popin: popin 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+  --animate-glowpulse: glowpulse 1.6s ease-in-out infinite;
+  --animate-swing: swing 3s ease-in-out infinite;
+  --animate-spinslow: spin 14s linear infinite;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-flicker: flicker 2.2s ease-in-out infinite;
+}
+
+@keyframes ember {
+  0% { transform: translateY(0) translateX(0) scale(1); opacity: 0; }
+  8% { opacity: 0.9; }
+  90% { opacity: 0.5; }
+  100% { transform: translateY(-110vh) translateX(4vw) scale(0.3); opacity: 0; }
+}
+@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+@keyframes cardin {
+  0% { transform: translateY(34px) scale(0.85); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes bannerin {
+  0% { transform: translateY(-16px) scale(0.9); opacity: 0; letter-spacing: 0.4em; }
+  12% { transform: translateY(0) scale(1); opacity: 1; letter-spacing: 0.12em; }
+  82% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(6px); }
+}
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes chestshake {
+  0%, 100% { transform: rotate(-3deg) translateY(0); }
+  25% { transform: rotate(3deg) translateY(-3px); }
+  50% { transform: rotate(-2deg) translateY(0); }
+  75% { transform: rotate(2deg) translateY(-2px); }
+}
+@keyframes popin {
+  0% { transform: scale(0) rotate(-12deg); opacity: 0; }
+  100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+@keyframes glowpulse {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(255, 194, 88, 0.5)); }
+  50% { filter: drop-shadow(0 0 18px rgba(255, 194, 88, 0.95)); }
+}
+@keyframes swing { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  18% { opacity: 0.82; }
+  40% { opacity: 0.95; }
+  62% { opacity: 0.78; }
+  81% { opacity: 0.92; }
+}
+
+html, body {
+  overflow: hidden;
+  background: var(--color-ink);
+  color: var(--color-bone);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+* { -webkit-tap-highlight-color: transparent; }
+canvas { display: block; }
+
+.pixel-corners {
+  clip-path: polygon(0 8px, 8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px));
+}
+.gothic-frame {
+  position: relative;
+  border: 2px solid var(--color-line);
+  box-shadow: 0 0 0 2px #120a1c, 0 0 0 4px #3a2354, 0 14px 40px rgba(0, 0, 0, 0.65);
+}
+.hp-low { animation: flicker 0.7s ease-in-out infinite; }
+.text-outline {
+  text-shadow: 0 2px 0 #120a1c, 0 -2px 0 #120a1c, 2px 0 0 #120a1c, -2px 0 0 #120a1c,
+    2px 2px 0 #120a1c, -2px -2px 0 #120a1c, 2px -2px 0 #120a1c, -2px 2px 0 #120a1c, 0 6px 18px rgba(0,0,0,0.8);
+}
+.no-select { user-select: none; -webkit-user-select: none; }

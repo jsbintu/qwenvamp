@@ -22,18 +22,47 @@ export type PassiveId =
 export type ClassId = 'barbarian' | 'necromancer' | 'sorceress';
 
 export type SkinId =
-  | 'risen' | 'clatter' | 'imp' | 'spitter' | 'goatkin' | 'archer' | 'wraith'
-  | 'brute' | 'shieldkin' | 'hexer' | 'ghoul' | 'bat' | 'goblin'
-  | 'butcher' | 'andariel' | 'baal' | 'terrorlord';
+  | 'risen'
+  | 'clatter'
+  | 'imp'
+  | 'spitter'
+  | 'goatkin'
+  | 'archer'
+  | 'wraith'
+  | 'brute'
+  | 'shieldkin'
+  | 'hexer'
+  | 'ghoul'
+  | 'bat'
+  | 'goblin'
+  | 'butcher'
+  | 'andariel'
+  | 'baal'
+  | 'terrorlord';
 
 export type CompId = WeaponId | PassiveId;
 
 export const WEAPON_IDS: WeaponId[] = [
-  'hellfire', 'bonespear', 'aura', 'lightning', 'blades', 'caltrops', 'whirlwind', 'scythe',
+  'hellfire',
+  'bonespear',
+  'aura',
+  'lightning',
+  'blades',
+  'caltrops',
+  'whirlwind',
+  'scythe',
 ];
 
 export const PASSIVE_IDS: PassiveId[] = [
-  'vitality', 'boots', 'greed', 'might', 'tome', 'hourglass', 'whetstone', 'armor', 'phoenix',
+  'vitality',
+  'boots',
+  'greed',
+  'might',
+  'tome',
+  'hourglass',
+  'whetstone',
+  'armor',
+  'phoenix',
 ];
 
 export function isWeapon(id: CompId): id is WeaponId {
@@ -111,7 +140,10 @@ export interface Snapshot {
   muted: boolean;
 }
 
-export interface StatLine { label: string; value: string; }
+export interface StatLine {
+  label: string;
+  value: string;
+}
 
 export interface EndStats {
   victory: boolean;

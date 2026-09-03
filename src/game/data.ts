@@ -9,7 +9,7 @@ export interface WeaponDef {
   color: string;
   baseDmg: number;
   baseCd: number;
-  ranks: RankDef[];
+  ranks: RankDef[]; // 5 ranks, index 0 = Rank I
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
