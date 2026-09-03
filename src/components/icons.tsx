@@ -80,6 +80,39 @@ function WeaponGlyph({ id, ...p }: IconProps & { id: WeaponId }) {
           <path d="M10 8c8-4 14 0 15 7-4-4-9-5-13-2l-2-5z" />
         </Wrap>
       );
+    case 'throwaxe':
+      return (
+        <Wrap {...p} color={c}>
+          <path d="M10 24L20 14" />
+          <path d="M14 6c5-3 11-1 13 4-4-1-7 0-9 3l-6-2 2-5z" />
+          <path d="M22 22l4 4" stroke="#fff" strokeWidth={2} />
+        </Wrap>
+      );
+    case 'corpses':
+      return (
+        <Wrap {...p} color={c}>
+          <ellipse cx={16} cy={20} rx={11} ry={6} />
+          <path d="M16 4v6M13 7h6" stroke="#fff" strokeWidth={2.4} />
+          <circle cx={11} cy={17} r={1.6} fill="#120a1c" />
+          <circle cx={21} cy={17} r={1.6} fill="#120a1c" />
+        </Wrap>
+      );
+    case 'frostnova':
+      return (
+        <Wrap {...p} color={c}>
+          <path d="M16 3v26M5 9.5l22 13M27 9.5l-22 13" stroke={c} strokeWidth={2.6} fill="none" />
+          <path d="M16 10l2 4-2 4-2-4 2-4z" fill="#fff" />
+          <circle cx={16} cy={16} r={3} fill="#fff" />
+        </Wrap>
+      );
+    case 'hammer':
+      return (
+        <Wrap {...p} color={c}>
+          <path d="M16 14v14" />
+          <rect x={8} y={5} width={16} height={10} rx={2.5} />
+          <path d="M16 7.5v5" stroke="#fff" strokeWidth={2} />
+        </Wrap>
+      );
   }
 }
 
@@ -153,6 +186,38 @@ function PassiveGlyph({ id, ...p }: IconProps & { id: PassiveId }) {
           <circle cx={16} cy={17} r={3} fill="#fff" />
         </Wrap>
       );
+    case 'wrath':
+      return (
+        <Wrap {...p} color={c}>
+          <path d="M6 20c2-8 6-12 10-14 4 2 8 6 10 14-3-2-5-2-7-1 1 3 0 6-3 8-3-2-4-5-3-8-2-1-4-1-7 1z" />
+          <circle cx={13} cy={16} r={1.8} fill="#120a1c" />
+          <circle cx={19} cy={16} r={1.8} fill="#120a1c" />
+        </Wrap>
+      );
+    case 'harvest':
+      return (
+        <Wrap {...p} color={c}>
+          <circle cx={16} cy={11} r={6} fill="#f4e8cf" />
+          <circle cx={14} cy={10} r={1.5} fill="#120a1c" />
+          <circle cx={18} cy={10} r={1.5} fill="#120a1c" />
+          <path d="M12 28V16h8v12" fill="none" />
+          <path d="M16 17v8" stroke="#fff" strokeWidth={1.8} />
+        </Wrap>
+      );
+    case 'archon':
+      return (
+        <Wrap {...p} color={c}>
+          <path d="M16 4l2.2 6.8L25 13l-6.8 2.2L16 22l-2.2-6.8L7 13l6.8-2.2L16 4z" />
+          <path d="M16 22v6M11 26h10" stroke={c} strokeWidth={2.4} fill="none" />
+        </Wrap>
+      );
+    case 'conviction':
+      return (
+        <Wrap {...p} color={c}>
+          <path d="M16 4l9 3.5v7c0 5.5-4 9.5-9 11.5-5-2-9-6-9-11.5v-7L16 4z" />
+          <path d="M16 9v12M11.5 13.5h9" stroke="#fff" strokeWidth={2.6} fill="none" />
+        </Wrap>
+      );
   }
 }
 
@@ -179,6 +244,16 @@ export function ClassIcon({ id, ...p }: IconProps & { id: ClassId }) {
         <circle cx={14.5} cy={13.5} r={1.2} fill="#120a1c" />
         <circle cx={17.5} cy={13.5} r={1.2} fill="#120a1c" />
         <path d="M14.8 16.5h2.4" stroke="#120a1c" />
+      </Wrap>
+    );
+  if (id === 'paladin')
+    return (
+      <Wrap {...p} color={c}>
+        <path d="M8 12a8 8 0 0116 0v10l-3-2-2 4-3-2.5L13 24l-2-4-3 2V12z" fill="#aebfd2" />
+        <rect x={7} y={13} width={18} height={3.4} fill={c} />
+        <path d="M16 5c1.5 2 1.5 4 0 6-1.5-2-1.5-4 0-6z" fill={c} />
+        <circle cx={12.5} cy={19.5} r={1.4} fill="#120a1c" />
+        <circle cx={19.5} cy={19.5} r={1.4} fill="#120a1c" />
       </Wrap>
     );
   return (

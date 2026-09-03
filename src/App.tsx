@@ -3,7 +3,7 @@ import { GloomfallEngine } from './game/engine';
 import type { Callbacks } from './game/engine';
 import type { Choice, ChestReward, ClassId, EndStats, Snapshot } from './game/types';
 import { bakeAll } from './game/sprites';
-import { sfx, setMuted } from './game/audio';
+import { sfx, setMuted, startMusic, stopMusic } from './game/audio';
 import HUD from './components/HUD';
 import {
   BossBanner, ChestScreen, EndScreen, FusionFlash, LevelUpScreen, LoadingScreen,
@@ -24,6 +24,8 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<GloomfallEngine | null>(null);
   const classRef = useRef<ClassId>('barbarian');
+  const activeRef = useRef(false);
+  const startingRef = useRef(false);
 
   const [ov, setOv] = useState<Ov>('menu');
   const [progress, setProgress] = useState(0);
@@ -61,25 +63,33 @@ export default function App() {
     return () => clearTimeout(t);
   }, [fusion]);
 
-  const startingRef = useRef(false);
+  const killEngine = useCallback(() => {
+    engineRef.current?.destroy();
+    engineRef.current = null;
+  }, []);
+
   const startRun = useCallback(async (cls: ClassId) => {
     if (startingRef.current) return;
     startingRef.current = true;
     classRef.current = cls;
+    activeRef.current = true;
     setOv('loading');
     setProgress(0);
+    setEnd(null);
     try {
       await bakeAll((p) => setProgress(p));
     } finally {
       startingRef.current = false;
     }
+    killEngine();
+    startMusic();
     setRunId((r) => r + 1);
     setOv('none');
-  }, []);
+  }, [killEngine]);
 
-  /* spawn engine after loading */
+  /* spawn engine ONLY when a new run starts — never when overlays open/close */
   useEffect(() => {
-    if (ov !== 'none' || !canvasRef.current) return;
+    if (!activeRef.current || !canvasRef.current || ov !== 'none') return;
     const cb: Callbacks = {
       onSnapshot: (s) => setSnap(s),
       onEnd: (s) => { setEnd(s); setOv('end'); },
@@ -93,13 +103,12 @@ export default function App() {
     engine.setMutedState(muted);
     engineRef.current = engine;
     setSnap(DEFAULT_SNAP);
-    setEnd(null);
     return () => {
       engine.destroy();
-      engineRef.current = null;
+      if (engineRef.current === engine) engineRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ov, runId]);
+  }, [runId]);
 
   const pick = useCallback((c: Choice) => {
     const more = engineRef.current?.choose(c);
@@ -124,10 +133,19 @@ export default function App() {
     setOv('none');
   }, []);
   const quit = useCallback(() => {
-    engineRef.current?.setPaused(false);
+    activeRef.current = false;
+    stopMusic();
+    killEngine();
     setOv('menu');
     setEnd(null);
-  }, []);
+  }, [killEngine]);
+  const toMenu = useCallback(() => {
+    activeRef.current = false;
+    stopMusic();
+    killEngine();
+    setOv('menu');
+    setEnd(null);
+  }, [killEngine]);
   const toggleMute = useCallback(() => {
     setMutedState((m) => {
       const next = !m;
@@ -167,7 +185,7 @@ export default function App() {
       {ov === 'chest' && <ChestScreen rewards={rewards} onClaim={claim} />}
       {ov === 'pause' && <PauseScreen onResume={resume} onQuit={quit} muted={muted} onMute={toggleMute} />}
       {ov === 'end' && end && (
-        <EndScreen stats={end} onRetry={() => startRun(classRef.current)} onMenu={() => { setOv('menu'); setEnd(null); }} />
+        <EndScreen stats={end} onRetry={() => startRun(classRef.current)} onMenu={toMenu} />
       )}
 
       {banner && inGame && <BossBanner key={banner.id} text={banner.text} sub={banner.sub} />}

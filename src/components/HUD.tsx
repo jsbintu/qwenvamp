@@ -21,21 +21,35 @@ function RankPips({ lvl, max = MAX_RANK, color = '#ffc258' }: { lvl: number; max
 
 function WeaponSlotView({ w }: { w: SnapshotWeapon }) {
   const def = WEAPONS[w.id];
+  const cdPct = w.cdMax > 0 ? Math.min(1, w.cd / w.cdMax) : 0;
+  const ready = cdPct <= 0.02;
   return (
     <div
-      className={`relative w-[54px] pixel-corners border-2 p-1 flex flex-col items-center gap-[2px] transition-transform hover:scale-110 ${
+      className={`relative w-[54px] h-[54px] pixel-corners border-2 p-1 flex flex-col items-center justify-center gap-[2px] transition-transform hover:scale-110 overflow-hidden ${
         w.fused ? 'border-ember animate-glowpulse bg-[#3a2318]' : 'border-line bg-panel/90'
       }`}
       title={w.fused ? `${w.fusedName} (EVOLVED)` : def.name}
     >
       {w.fused && (
-        <div className="absolute -top-2 -right-2 z-10">
+        <div className="absolute -top-2 -right-2 z-20">
           <FusionSigil size={18} />
         </div>
       )}
       <CompIcon id={w.id} size={26} />
       <RankPips lvl={w.lvl} color={w.fused ? '#ff8a3d' : def.color} />
       {w.fused && <div className="text-[7px] font-black text-ember leading-none tracking-wider">FUSED</div>}
+      {/* radial cooldown swipe */}
+      {!ready && (
+        <div
+          className="absolute inset-0 z-10 pointer-events-none"
+          style={{
+            background: `conic-gradient(rgba(8,4,16,0.78) ${cdPct * 360}deg, rgba(8,4,16,0) 0deg)`,
+          }}
+        />
+      )}
+      {ready && (
+        <div className="absolute inset-0 z-0 pixel-corners" style={{ boxShadow: `inset 0 0 8px ${def.color}55` }} />
+      )}
     </div>
   );
 }

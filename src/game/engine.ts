@@ -74,6 +74,9 @@ interface Hazard {
   t: number; dur: number; dmg: number; color: string; slow: boolean; owner: 'e' | 'p'; slot: number;
 }
 
+interface Corpse { x: number; y: number; big: boolean; t: number; dur: number; }
+interface HammerQ { x: number; y: number; t: number; slot: number; }
+
 export interface Callbacks {
   onSnapshot: (s: Snapshot) => void;
   onEnd: (s: EndStats) => void;
@@ -159,6 +162,11 @@ export class GloomfallEngine {
   private orbitals: Orbital[] = [];
   private hazards: Hazard[] = [];
   private arcs: { x1: number; y1: number; x2: number; y2: number; t: number; color: string }[] = [];
+  private corpses: Corpse[] = [];
+  private hammerQ: HammerQ[] = [];
+  private pSlowT = 0;
+  private blessedT = 0;
+  private baseArmor = 0;
 
   /* timers */
   private spawnT = 0.5;
@@ -228,6 +236,9 @@ export class GloomfallEngine {
     if (this.classId === 'necromancer') {
       this.st.areaMul *= 1.15;
       this.st.xpMul *= 1.1;
+    }
+    if (this.classId === 'paladin') {
+      this.baseArmor = 2;
     }
     this.addWeapon(CLASSES[this.classId].startWeapon);
   }
@@ -317,7 +328,7 @@ export class GloomfallEngine {
     const def = CLASSES[this.classId];
     s.dmgMul = def.dmgMul; s.cdMul = 1; s.areaMul = this.classId === 'necromancer' ? 1.15 : 1;
     s.spdMul = def.spdMul; s.maxHpMul = def.hpMul; s.regen = 0; s.goldMul = 1; s.luck = 0;
-    s.xpMul = this.classId === 'necromancer' ? 1.1 : 1; s.armor = 0; s.crit = 0.05;
+    s.xpMul = this.classId === 'necromancer' ? 1.1 : 1; s.armor = this.baseArmor; s.crit = 0.05;
     s.pickup = 1; s.pspd = 1; s.pierce = 0; s.lifeSteal = 0; s.goldHeal = 0;
     s.flags = new Set<string>();
 
@@ -355,6 +366,8 @@ export class GloomfallEngine {
   private buildChoices(): Choice[] {
     const pool: Choice[] = [];
     for (const id of WEAPON_IDS) {
+      const wd = WEAPONS[id];
+      if (wd.classOnly && wd.classOnly !== this.classId) continue;
       const slot = this.weapons.find((w) => w.id === id);
       if (slot) {
         if (slot.lvl < MAX_RANK) pool.push({ kind: 'weapon', id, level: slot.lvl + 1, isNew: false, rankText: WEAPONS[id].ranks[slot.lvl].text });
@@ -363,6 +376,8 @@ export class GloomfallEngine {
       }
     }
     for (const id of PASSIVE_IDS) {
+      const pd = PASSIVES[id];
+      if (pd.classOnly && pd.classOnly !== this.classId) continue;
       const slot = this.passives.find((p) => p.kind === 'p' && p.id === id);
       if (slot && slot.kind === 'p') {
         if (slot.lvl < PASSIVES[id].ranks.length) pool.push({ kind: 'passive', id, level: slot.lvl + 1, isNew: false, rankText: PASSIVES[id].ranks[slot.lvl].text });
@@ -596,6 +611,18 @@ export class GloomfallEngine {
         case 'wraith':
           want = e.ai.state === 1 ? 'attack' : 'walk';
           break;
+        case 'knight':
+          want = e.ai.state === 1 ? 'attack' : e.ai.state === 2 ? 'charge' : 'walk';
+          break;
+        case 'cinder':
+          want = e.ai.state === 1 ? 'attack' : 'walk';
+          break;
+        case 'worm':
+          want = e.ai.state === 2 ? 'attack' : 'walk';
+          break;
+        case 'caller':
+          want = e.ai.t > 2.7 ? 'cast' : 'walk';
+          break;
         default:
           want = 'walk';
       }
@@ -768,6 +795,120 @@ export class GloomfallEngine {
           if (ai.t <= 0) { ai.t = 1.4; this.pickups.push({ x: e.x, y: e.y, kind: 'gold', v: 4, t: 0 }); sfx.gold(); }
           break;
         }
+        case 'cinder': {
+          /* kamikaze: rush, blink-fuse, detonate */
+          if (ai.state === 0) {
+            const rush = d < 170 ? 1.65 : 1;
+            e.x += nx * spd * rush * dt; e.y += ny * spd * rush * dt;
+            if (d < 78) { ai.state = 1; ai.t = 0.85; sfx.telegraph(); }
+          } else {
+            ai.t -= dt;
+            if (Math.random() < dt * 24) this.puff(e.x + rand(-8, 8), e.y + rand(-8, 8), '#ff8a3d');
+            if (ai.t <= 0) {
+              e.dead = true; e.gone = true;
+              this.spawnSprite('exp-fire', e.x, e.y, 210, 0.5, 0, 0);
+              this.ring(e.x, e.y, '#ff6b3d', 105);
+              this.shakeAt(6);
+              sfx.explode();
+              if (dist2(e.x, e.y, px, py) < 105 * 105) this.hurtPlayer(e.dmg * 1.5);
+            }
+          }
+          break;
+        }
+        case 'caller': {
+          /* keeps its distance and raises the dead */
+          if (d < 260) { e.x -= nx * spd * dt; e.y -= ny * spd * dt; }
+          else if (d > 360) { e.x += nx * spd * 0.6 * dt; e.y += ny * spd * 0.6 * dt; }
+          ai.t -= dt;
+          if (ai.t <= 0) {
+            ai.t = 3.2;
+            for (let k = 0; k < 2; k++) {
+              const risen = ENEMIES[0];
+              this.spawnEnemy(risen, e.x + rand(-40, 40), e.y + rand(-40, 40));
+            }
+            this.burst(e.x, e.y, 10, '#9be85e', 'smoke');
+            this.ring(e.x, e.y, '#9be85e', 50);
+            sfx.zap();
+          }
+          break;
+        }
+        case 'worm': {
+          /* burrow → telegraph → burst → vulnerable */
+          if (ai.state === 0) {
+            ai.t -= dt;
+            if (ai.t <= 0) {
+              ai.t = 1.4;
+              const na = rand(0, Math.PI * 2);
+              const nd = rand(90, 210);
+              e.x = px + Math.cos(na) * nd;
+              e.y = py + Math.sin(na) * nd;
+              ai.state = 1; ai.t = 0.75;
+              sfx.telegraph();
+            }
+          } else if (ai.state === 1) {
+            ai.t -= dt;
+            if (ai.t <= 0) {
+              ai.state = 2; ai.t = 0.3;
+              this.ring(e.x, e.y, '#b08968', 95);
+              this.spawnSprite('exp-poison', e.x, e.y, 150, 0.4, 0, 0);
+              this.burst(e.x, e.y, 14, '#8a7355', 'shard');
+              this.shakeAt(6);
+              sfx.explode();
+              if (dist2(e.x, e.y, px, py) < 95 * 95) this.hurtPlayer(e.dmg);
+              for (const o of this.enemies) {
+                if (o !== e && !o.dead && dist2(o.x, o.y, e.x, e.y) < 90 * 90) {
+                  const dd = Math.hypot(o.x - e.x, o.y - e.y) || 1;
+                  o.x += ((o.x - e.x) / dd) * 40; o.y += ((o.y - e.y) / dd) * 40;
+                }
+              }
+            }
+          } else if (ai.state === 2) {
+            ai.t -= dt;
+            if (ai.t <= 0) { ai.state = 3; ai.t = 2.4; }
+          } else {
+            e.x += nx * 60 * dt; e.y += ny * 60 * dt;
+            ai.t -= dt;
+            if (Math.random() < dt * 6) this.puff(e.x, e.y, '#8a7355');
+            if (ai.t <= 0) { ai.state = 0; ai.t = rand(0.6, 1.4); this.burst(e.x, e.y, 6, '#8a7355', 'smoke'); }
+          }
+          break;
+        }
+        case 'knight': {
+          /* armored duelist: advance, telegraph, dash, recover */
+          if (ai.state === 0) {
+            e.x += nx * spd * dt; e.y += ny * spd * dt;
+            ai.t -= dt;
+            if (ai.t <= 0 && d < 330) { ai.state = 1; ai.t = 0.5; ai.ang = Math.atan2(dy, dx); sfx.telegraph(); }
+          } else if (ai.state === 1) {
+            ai.t -= dt;
+            if (ai.t <= 0) { ai.state = 2; ai.t = 0.45; }
+          } else if (ai.state === 2) {
+            e.x += Math.cos(ai.ang) * spd * 4.6 * dt;
+            e.y += Math.sin(ai.ang) * spd * 4.6 * dt;
+            this.puff(e.x, e.y, 'rgba(184,67,79,0.6)');
+            ai.t -= dt;
+            if (ai.t <= 0) { ai.state = 3; ai.t = 0.9; }
+          } else {
+            ai.t -= dt;
+            if (ai.t <= 0) { ai.state = 0; ai.t = rand(1.8, 2.8); }
+          }
+          break;
+        }
+        case 'shade': {
+          /* drifts close and chills you to the bone */
+          e.x += nx * spd * dt; e.y += ny * spd * dt;
+          if (dist2(e.x, e.y, px, py) < 135 * 135) {
+            if (!this.st.flags.has('noslow')) this.pSlowT = 0.35;
+            if (Math.random() < dt * 16) this.puff(px + rand(-30, 30), py + rand(-30, 30), '#a8d8e8');
+          }
+          break;
+        }
+        case 'carrier': {
+          /* bloated, slow, brimming with plague */
+          e.x += nx * spd * dt; e.y += ny * spd * dt;
+          if (Math.random() < dt * 3) this.puff(e.x + rand(-10, 10), e.y + rand(-10, 10), '#a4d94e');
+          break;
+        }
         default: {
           e.x += nx * spd * dt; e.y += ny * spd * dt;
         }
@@ -850,6 +991,9 @@ export class GloomfallEngine {
       case 'spin': return 1.1;
       case 'beams': return 3.2;
       case 'dash': return 1.6;
+      case 'feathers': return 1.0;
+      case 'bonering': return 0.9;
+      case 'graveyard': return 0.8;
       default: return 0.7;
     }
   }
@@ -1001,6 +1145,45 @@ export class GloomfallEngine {
         }
         break;
       }
+      case 'feathers': {
+        /* three staggered aimed fans of blood-feathers */
+        const n = Math.floor(a.t / 0.28);
+        const fired = Math.floor((a.t - dt) / 0.28);
+        if (n > fired && n <= 3) {
+          for (let k = -2; k <= 2; k++) this.ebullet(e.x, e.y, angP + k * 0.16, 300, e.dmg * 0.45, '#e04d5c', false);
+          sfx.shoot();
+        }
+        break;
+      }
+      case 'bonering': {
+        /* rotating double ring of bone shards */
+        const n = Math.floor(a.t / 0.3);
+        const fired = Math.floor((a.t - dt) / 0.3);
+        if (n > fired && n <= 3) {
+          const off = n * 0.26;
+          for (let i = 0; i < 14; i++) this.ebullet(e.x, e.y, (i / 14) * Math.PI * 2 + off, 200, e.dmg * 0.4, '#e8e0cc', false);
+          this.ring(e.x, e.y, '#e8e0cc', 60 + n * 30);
+          sfx.bones();
+        }
+        break;
+      }
+      case 'graveyard': {
+        /* the dead rise in a circle around you */
+        if (!a.done) {
+          a.done = true;
+          const risen = ENEMIES[0];
+          for (let i = 0; i < 7; i++) {
+            const ga = (i / 7) * Math.PI * 2;
+            const gx = this.px + Math.cos(ga) * 175;
+            const gy = this.py + Math.sin(ga) * 175;
+            this.spawnEnemy(risen, gx, gy);
+            this.burst(gx, gy, 6, '#9be85e', 'smoke');
+          }
+          this.ring(this.px, this.py, '#9be85e', 180);
+          sfx.zap();
+        }
+        break;
+      }
     }
   }
 
@@ -1112,6 +1295,109 @@ export class GloomfallEngine {
           s.cd = s.rcd;
           break;
         }
+        case 'throwaxe': {
+          const t = this.nearest(620);
+          if (!t) { s.cd = 0.15; break; }
+          const base = Math.atan2(t.y - this.py, t.x - this.px);
+          for (let k = 0; k < s.proj; k++) {
+            const a = base + (k - (s.proj - 1) / 2) * 0.4;
+            this.spawnProj(i, a, 390 * s.pspd, s, 'axe', 11, false);
+          }
+          sfx.bones();
+          this.pAtk = Math.max(this.pAtk, 0.35);
+          s.cd = s.rcd;
+          break;
+        }
+        case 'corpses': {
+          /* no ammo of the dead? desecrate fresh ground */
+          if (this.bestCorpse() < 0) {
+            const alive = this.enemies.filter((e) => !e.dead && e.bossIdx < 0 && dist2(e.x, e.y, this.px, this.py) < 460 * 460);
+            const t = alive[Math.floor(Math.random() * alive.length)];
+            if (t && this.corpses.length < 44) {
+              this.corpses.push({ x: t.x + rand(-20, 20), y: t.y + rand(-20, 20), big: false, t: 0, dur: 6 });
+              this.burst(t.x, t.y, 5, '#9be85e', 'smoke');
+            }
+            s.cd = 0.55;
+            break;
+          }
+          const detonations = Math.max(1, s.proj);
+          let done = 0;
+          for (let dts = 0; dts < detonations; dts++) {
+            const ci = this.bestCorpse();
+            if (ci < 0) break;
+            const cp = this.corpses[ci];
+            this.corpses.splice(ci, 1);
+            const rad = (95 + (cp.big ? 45 : 0)) * s.area * this.st.areaMul;
+            this.explodeAt(cp.x, cp.y, rad, s.dmg * (cp.big ? 1.8 : 1), i, s);
+            if (s.mods.has('bonenova')) {
+              for (let k = 0; k < 8; k++) {
+                this.spawnProjAt(cp.x, cp.y, i, (k / 8) * Math.PI * 2, 330, s, 'bone', 8, false);
+              }
+            }
+            this.spawnSprite('soul-green', cp.x, cp.y - 10, 26, 0.5, 0, -60);
+            done++;
+          }
+          s.cd = done > 0 ? s.rcd : 0.2;
+          break;
+        }
+        case 'frostnova': {
+          const Rf = 120 * s.area;
+          const t = this.nearest(Rf * 1.3);
+          if (!t) { s.cd = 0.2; break; }
+          for (const e of this.enemies) {
+            if (e.dead) continue;
+            if (dist2(e.x, e.y, this.px, this.py) < (Rf + e.r) * (Rf + e.r)) {
+              this.damageEnemy(e, s.dmg, i, 60);
+              e.slow = Math.max(e.slow, 2.2 + (s.area - 1));
+            }
+          }
+          this.ring(this.px, this.py, '#7fd4e8', Rf);
+          this.spawnSprite('exp-frost', this.px, this.py, Rf * 1.9, 0.4, 0, 0);
+          this.burst(this.px, this.py, 10, '#c0ecff', 'spark');
+          sfx.freeze();
+          this.pAtk = Math.max(this.pAtk, 0.4);
+          s.cd = s.rcd;
+          break;
+        }
+        case 'hammer': {
+          const t = this.densestEnemy();
+          if (!t || dist2(t.x, t.y, this.px, this.py) > 520 * 520) { s.cd = 0.2; break; }
+          this.hammerQ.push({ x: t.x, y: t.y, t: 0.42, slot: i });
+          sfx.telegraph();
+          s.cd = s.rcd;
+          break;
+        }
+      }
+    }
+    /* hammer slam queue */
+    for (let hi = this.hammerQ.length - 1; hi >= 0; hi--) {
+      const hq = this.hammerQ[hi];
+      hq.t -= dt;
+      if (hq.t > 0) continue;
+      this.hammerQ.splice(hi, 1);
+      const s = this.weapons[hq.slot];
+      if (!s) continue;
+      const R = 135 * s.area;
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        const rr = R + e.r;
+        if (dist2(e.x, e.y, hq.x, hq.y) < rr * rr) this.damageEnemy(e, s.dmg, hq.slot, 330);
+      }
+      this.spawnSprite('exp-holy', hq.x, hq.y, R * 2.1, 0.5, 0, 0);
+      this.ring(hq.x, hq.y, '#ffc258', R);
+      if (this.decals.length < 130) this.decals.push({ x: hq.x, y: hq.y, r: R * 0.55, a: 0.5, color: '#241a10', spr: Math.floor(rand(0, 3)) });
+      this.shakeAt(9);
+      sfx.slam();
+      if (s.mods.has('shockwave')) {
+        this.hammerQ.push({ x: hq.x, y: hq.y, t: 0.14, slot: hq.slot });
+        this.ring(hq.x, hq.y, '#fff6dd', R * 1.5);
+      }
+      if (s.mods.has('seism')) {
+        for (let k = 0; k < 4; k++) {
+          const a = rand(0, Math.PI * 2);
+          const dd = rand(90, 170);
+          this.explodeAt(hq.x + Math.cos(a) * dd, hq.y + Math.sin(a) * dd, 60 * s.area, s.dmg * 0.5, hq.slot, s);
+        }
       }
     }
     /* deferred micro-tasks */
@@ -1158,11 +1444,16 @@ export class GloomfallEngine {
       case 'hellfire':
       case 'whirlwind': return 'fire';
       case 'lightning':
-      case 'blades': return 'frost';
+      case 'blades':
+      case 'frostnova': return 'frost';
       case 'caltrops': return 'arcane';
-      case 'aura': return 'holy';
+      case 'aura':
+      case 'hammer': return 'holy';
       case 'bonespear':
-      case 'scythe': return 'poison';
+      case 'scythe':
+      case 'corpses': return 'poison';
+      case 'throwaxe': return 'frost';
+      default: return 'fire';
     }
   }
 
@@ -1184,6 +1475,30 @@ export class GloomfallEngine {
     this.burst(this.px, this.py, 3, '#d8cfae', 'smoke');
     sfx.bones();
     this.pAtk = Math.max(this.pAtk, 0.35);
+  }
+
+  private bestCorpse(): number {
+    let best = -1;
+    let bestScore = 0;
+    for (let i = 0; i < this.corpses.length; i++) {
+      const cp = this.corpses[i];
+      let cnt = cp.big ? 3 : 0;
+      for (const e of this.enemies) {
+        if (e.dead) continue;
+        if (dist2(e.x, e.y, cp.x, cp.y) < 150 * 150) cnt++;
+      }
+      if (cnt > bestScore) { bestScore = cnt; best = i; }
+    }
+    return bestScore >= 2 ? best : -1;
+  }
+
+  private spawnProjAt(x: number, y: number, i: number, ang: number, spd: number, s: WeaponSlot, kind: string, r: number, trail: boolean) {
+    const p: Proj = {
+      x, y, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd,
+      r, dmg: s.dmg, pierce: s.pierce, hit: new Set(), life: 1.6, kind,
+      color: WEAPONS[s.id].color, slot: i, knock: 90, trail,
+    };
+    this.projs.push(p);
   }
 
   private spawnProj(i: number, ang: number, spd: number, s: WeaponSlot, kind: string, r: number, trail: boolean) {
@@ -1252,6 +1567,36 @@ export class GloomfallEngine {
 
   private updateProjs(dt: number) {
     for (const p of this.projs) {
+      /* berserker axe: fly out, then reverse and carve home */
+      if (p.kind === 'axe') {
+        const age = 2.2 - p.life;
+        if (age < 0.34) {
+          p.vx *= 1 - 2.6 * dt;
+          p.vy *= 1 - 2.6 * dt;
+        } else {
+          const dx = this.px - p.x, dy = this.py - p.y;
+          const d = Math.hypot(dx, dy) || 1;
+          p.vx += (dx / d) * 1900 * dt;
+          p.vy += (dy / d) * 1900 * dt;
+          const sp = Math.hypot(p.vx, p.vy);
+          const maxSp = 540;
+          if (sp > maxSp) { p.vx = (p.vx / sp) * maxSp; p.vy = (p.vy / sp) * maxSp; }
+          if (d < 26) {
+            p.life = 0;
+            p.hit.clear();
+            const s = this.weapons[p.slot];
+            if (s && s.mods.has('fangs')) {
+              const t = this.nearest(620);
+              if (t) {
+                const a = Math.atan2(t.y - this.py, t.x - this.px);
+                this.spawnProj(p.slot, a, 420, s, 'axe', p.r, false);
+              }
+            }
+            continue;
+          }
+        }
+        if (Math.random() < dt * 30) this.puff(p.x, p.y, '#c9d4e4');
+      }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.life -= dt;
@@ -1279,16 +1624,16 @@ export class GloomfallEngine {
   private onProjHit(p: Proj, e: Enemy) {
     const s = this.weapons[p.slot];
     if (!s) { this.damageEnemy(e, p.dmg, p.slot, p.knock); return; }
-    if (e.skin === 'shieldkin') {
+    if (e.skin === 'shieldkin' || (e.skin === 'knight' && e.ai.state === 0)) {
       const angIn = Math.atan2(p.y - e.y, p.x - e.x);
-      let da = angIn - e.ai.ang;
+      let da = angIn - (e.skin === 'knight' ? Math.atan2(this.py - e.y, this.px - e.x) : e.ai.ang);
       while (da > Math.PI) da -= Math.PI * 2;
       while (da < -Math.PI) da += Math.PI * 2;
       if (Math.abs(da) < 1.2 && p.pierce < 900) {
         this.floater(e.x, e.y - e.r, 'BLOCK', '#8fa3b8', 11);
         sfx.hit();
         p.pierce = Math.min(p.pierce, 0);
-        if (p.kind !== 'bone') p.life = 0;
+        if (p.kind !== 'bone' && p.kind !== 'axe') p.life = 0;
         return;
       }
     }
@@ -1351,10 +1696,18 @@ export class GloomfallEngine {
 
   private damageEnemy(e: Enemy, amount: number, slot: number, knock: number, critBonus = 0) {
     if (e.dead) return;
+    /* grave worms are untouchable while burrowed or surfacing */
+    if (e.skin === 'worm' && e.ai.state < 2) {
+      this.floater(e.x, e.y - e.r, 'BURROWED', '#b08968', 10);
+      return;
+    }
     const s = this.weapons[slot];
-    const critChance = (s ? s.crit : this.st.crit) + critBonus;
+    let critChance = (s ? s.crit : this.st.crit) + critBonus;
+    if (this.st.flags.has('rage') && this.hp < this.maxHp * 0.5) critChance += 0.2;
     const crit = Math.random() < critChance;
     let dmg = amount * (crit ? 2 : 1) * rand(0.9, 1.1);
+    if (this.st.flags.has('conviction') && dist2(e.x, e.y, this.px, this.py) < 150 * 150) dmg *= 1.2;
+    if (e.slow > 0 && this.weapons.some((w) => w.mods.has('shatter'))) dmg *= 1.5;
     dmg = Math.max(1, Math.round(dmg));
     e.hp -= dmg;
     e.flash = 1;
@@ -1376,12 +1729,43 @@ export class GloomfallEngine {
     if (e.hp <= 0) this.killEnemy(e, slot);
   }
 
+  private hasCorpses() {
+    return this.classId === 'necromancer' || this.weapons.some((w) => w.id === 'corpses');
+  }
+
   private killEnemy(e: Enemy, slot: number) {
     e.dead = true;
     e.dying = 0;
     e.anim.play('die', true);
     this.kills++;
     const s = this.weapons[slot];
+    /* necromancy fuel */
+    if (this.hasCorpses() && e.bossIdx < 0 && this.corpses.length < 44) {
+      this.corpses.push({ x: e.x + rand(-6, 6), y: e.y + rand(-4, 4), big: e.elite, t: 0, dur: e.elite ? 9 : 6 });
+    }
+    /* cinder fiends detonate even when slain mid-fuse */
+    if (e.skin === 'cinder' && e.ai.state === 1) {
+      this.spawnSprite('exp-fire', e.x, e.y, 160, 0.4, 0, 0);
+      if (dist2(e.x, e.y, this.px, this.py) < 80 * 80) this.hurtPlayer(e.dmg);
+    }
+    /* plague carriers burst into imps */
+    if (e.skin === 'carrier' && e.bossIdx < 0) {
+      const imp = ENEMIES.find((d) => d.skin === 'imp') ?? ENEMIES[0];
+      for (let k = 0; k < 3; k++) {
+        this.spawnEnemy(imp, e.x + rand(-46, 46), e.y + rand(-46, 46));
+      }
+      this.burst(e.x, e.y, 12, '#d8c04d', 'shard');
+      sfx.explode();
+    }
+    /* grim harvest procs */
+    if (this.st.flags.has('soulsiphon')) {
+      const nt = this.nearestTo(e, 210, e);
+      if (nt) {
+        this.damageEnemy(nt, 18 + this.level * 2, slot, 40);
+        this.arcs.push({ x1: e.x, y1: e.y, x2: nt.x, y2: nt.y, t: 0.22, color: '#9be85e' });
+      }
+    }
+    if (this.st.flags.has('killheal')) this.hp = clamp(this.hp + 2, 1, this.maxHp);
     if (this.decals.length < 130) {
       this.decals.push({ x: e.x, y: e.y + e.r * 0.4, r: e.r * rand(0.9, 1.4), a: 0.55, color: '#5c1220', spr: Math.floor(rand(0, 3)) });
     }
@@ -1431,6 +1815,15 @@ export class GloomfallEngine {
 
   private hurtPlayer(amount: number, src?: Enemy) {
     if (this.iframe > 0 || this.over || this.uiLock) return;
+    /* paladin ward: one hit blocked every 10s */
+    if (this.st.flags.has('blessed') && this.blessedT <= 0) {
+      this.blessedT = 10;
+      this.iframe = 0.4;
+      this.ring(this.px, this.py, '#ffc258', 90);
+      this.floater(this.px, this.py - 30, 'BLESSED', '#ffc258', 14);
+      sfx.heal();
+      return;
+    }
     let dmg = Math.max(1, amount - this.st.armor);
     if (this.st.flags.has('warded')) dmg *= 0.92;
     dmg = Math.round(dmg);
@@ -1551,6 +1944,9 @@ export class GloomfallEngine {
         }
       }
     }
+    /* corpses rot */
+    for (const cp of this.corpses) cp.t += dt;
+    this.corpses = this.corpses.filter((cp) => cp.t < cp.dur);
     if (f.has('trail') && this.moving) {
       this.trailT -= dt;
       if (this.trailT <= 0) {
@@ -1605,10 +2001,14 @@ export class GloomfallEngine {
     if (this.keys.has('a') || this.keys.has('arrowleft')) mx -= 1;
     if (this.keys.has('d') || this.keys.has('arrowright')) mx += 1;
     this.moving = mx !== 0 || my !== 0;
+    this.pSlowT = Math.max(0, this.pSlowT - dt);
+    this.blessedT = Math.max(0, this.blessedT - dt);
     if (this.moving) {
       const len = Math.hypot(mx, my);
       let spd = 185 * this.st.spdMul;
       if (this.spinT > 0) spd *= 0.55;
+      if (this.pSlowT > 0) spd *= 0.6;
+      if (this.st.flags.has('berserk') && this.hp < this.maxHp * 0.5) spd *= 1.18;
       this.px += (mx / len) * spd * dt;
       this.py += (my / len) * spd * dt;
       if (mx !== 0) this.facing = mx > 0 ? 1 : -1;
@@ -1880,6 +2280,11 @@ export class GloomfallEngine {
       this.uiLock = true;
       sfx.levelup();
       this.flashT = Math.max(this.flashT, 0.25);
+      if (this.st.flags.has('overload')) {
+        const fake = { ...this.mkSlot('lightning'), dmg: 1, area: 1.4 } as WeaponSlot;
+        this.explodeAt(this.px, this.py, 210, 30 + this.level * 5, 0, fake);
+        this.ring(this.px, this.py, '#7fd4e8', 210);
+      }
       this.cb.onLevelUp(this.buildChoices());
     }
   }
@@ -1914,7 +2319,7 @@ export class GloomfallEngine {
         { label: 'Demons slain', value: this.kills.toLocaleString() },
         { label: 'Gold hoarded', value: this.gold.toLocaleString() },
         { label: 'Level reached', value: `${this.level}` },
-        { label: 'Bosses slain', value: `${this.bossKills} / 4` },
+        { label: 'Bosses slain', value: `${this.bossKills} / 6` },
         { label: 'Evolutions', value: `${this.fusionNames.length}` },
       ],
     };
@@ -1927,6 +2332,7 @@ export class GloomfallEngine {
     const weapons: SnapshotWeapon[] = this.weapons.map((w) => ({
       id: w.id, lvl: w.lvl, fused: !!w.fused,
       fusedName: w.fused?.def.name, fusedWith: w.fused?.partner,
+      cd: Math.max(0, Math.min(w.cd, w.rcd)), cdMax: w.rcd,
     }));
     const passives: SnapshotPassive[] = this.passives.map((p) =>
       p.kind === 'p'
@@ -2056,6 +2462,39 @@ export class GloomfallEngine {
     for (const sp of this.spikes) {
       const t01 = sp.t < 0.25 ? (sp.t / 0.25) * 0.3 : 0.3 + fxFrame('caltrop', this.time + sp.x * 0.13) * 0.6;
       drawFx(c, 'caltrop', sp.x, sp.y, 30, t01);
+    }
+
+    /* necromantic corpses awaiting detonation */
+    for (const cp of this.corpses) {
+      const fade = clamp(1 - cp.t / cp.dur, 0, 1);
+      c.globalAlpha = 0.55 * fade + 0.15;
+      c.fillStyle = '#3d4d2e';
+      c.strokeStyle = 'rgba(24,10,34,0.8)';
+      c.lineWidth = 2;
+      c.beginPath();
+      c.ellipse(cp.x, cp.y, cp.big ? 17 : 11, cp.big ? 9 : 6, 0.4, 0, Math.PI * 2);
+      c.fill();
+      c.stroke();
+      c.globalAlpha = 0.35 + Math.sin(this.time * 6 + cp.x) * 0.15;
+      c.fillStyle = '#9be85e';
+      c.beginPath();
+      c.arc(cp.x + 3, cp.y - 3, 2.4, 0, Math.PI * 2);
+      c.fill();
+      c.globalAlpha = 1;
+    }
+
+    /* hammer-of-heaven telegraphs */
+    for (const hq of this.hammerQ) {
+      const p = clamp(1 - hq.t / 0.42, 0, 1);
+      c.globalAlpha = 0.3 + Math.sin(this.time * 20) * 0.12;
+      c.strokeStyle = '#ffc258';
+      c.lineWidth = 3.5;
+      c.beginPath();
+      c.arc(hq.x, hq.y, 135 * (1.35 - p * 0.35), 0, Math.PI * 2);
+      c.stroke();
+      c.globalAlpha = 0.85;
+      drawFx(c, 'spark', hq.x, hq.y - 260 * (1 - p), 34, fxFrame('spark', this.time * 3), 0, p);
+      c.globalAlpha = 1;
     }
 
     /* enemies sorted by y */
@@ -2536,6 +2975,27 @@ export class GloomfallEngine {
       c.stroke();
       return;
     }
+    /* grave worm: hidden mound, telegraph ring, then it surfaces */
+    if (e.skin === 'worm' && !e.dead && e.ai.state < 2) {
+      c.fillStyle = 'rgba(138,115,85,0.8)';
+      c.strokeStyle = 'rgba(24,10,34,0.85)';
+      c.lineWidth = 2.4;
+      c.beginPath();
+      c.ellipse(x, y + e.r * 0.35, e.r * 1.15, e.r * 0.6, 0, Math.PI, 0);
+      c.fill();
+      c.stroke();
+      if (e.ai.state === 1) {
+        const p = 1 - e.ai.t / 0.75;
+        c.globalAlpha = 0.5 + Math.sin(this.time * 18) * 0.25;
+        c.strokeStyle = '#b08968';
+        c.lineWidth = 3.5;
+        c.beginPath();
+        c.arc(x, y, e.r * (1.8 - p * 0.7), 0, Math.PI * 2);
+        c.stroke();
+        c.globalAlpha = 1;
+      }
+      return;
+    }
 
     if (e.dead) {
       const dur = isBoss ? 1.15 : 0.62;
@@ -2555,6 +3015,36 @@ export class GloomfallEngine {
       c.lineWidth = 3;
       c.globalAlpha = 0.65 + Math.sin(this.time * 6 + e.seed) * 0.3;
       c.beginPath(); c.arc(x, y, e.r + 7, 0, Math.PI * 2); c.stroke();
+      c.globalAlpha = 1;
+    }
+    /* frost shade chill aura */
+    if (e.skin === 'shade' && !e.dead) {
+      c.globalAlpha = 0.16 + Math.sin(this.time * 4 + e.seed) * 0.06;
+      const cg = c.createRadialGradient(x, y, 10, x, y, 135);
+      cg.addColorStop(0, 'rgba(127,212,232,0.5)');
+      cg.addColorStop(1, 'rgba(127,212,232,0)');
+      c.fillStyle = cg;
+      c.beginPath(); c.arc(x, y, 135, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = 0.5;
+      c.strokeStyle = '#7fd4e8';
+      c.lineWidth = 2;
+      c.setLineDash([8, 10]);
+      c.lineDashOffset = this.time * 30;
+      c.beginPath(); c.arc(x, y, 135, 0, Math.PI * 2); c.stroke();
+      c.setLineDash([]);
+      c.globalAlpha = 1;
+    }
+    /* knight dash telegraph line */
+    if (e.skin === 'knight' && !e.dead && e.ai.state === 1) {
+      c.globalAlpha = 0.45 + Math.sin(this.time * 20) * 0.25;
+      c.strokeStyle = '#e6404f';
+      c.lineWidth = 4;
+      c.setLineDash([12, 10]);
+      c.beginPath();
+      c.moveTo(x, y);
+      c.lineTo(x + Math.cos(e.ai.ang) * 300, y + Math.sin(e.ai.ang) * 300);
+      c.stroke();
+      c.setLineDash([]);
       c.globalAlpha = 1;
     }
 
@@ -2578,6 +3068,22 @@ export class GloomfallEngine {
       c.fillStyle = '#ffffff';
       c.beginPath();
       c.arc(x, y, e.r, 0, Math.PI * 2);
+      c.fill();
+      c.restore();
+    }
+    /* cinder fiend fuse: pulsing molten glow as it's about to blow */
+    if (e.skin === 'cinder' && !e.dead && e.ai.state === 1) {
+      const fp = 1 - e.ai.t / 0.85;
+      c.save();
+      c.globalCompositeOperation = 'lighter';
+      c.globalAlpha = 0.4 + fp * 0.5 + Math.sin(this.time * 26) * 0.15;
+      const fg = c.createRadialGradient(x, y, 2, x, y, e.r * (1.4 + fp));
+      fg.addColorStop(0, '#fff3c4');
+      fg.addColorStop(0.5, '#ff8a3d');
+      fg.addColorStop(1, 'rgba(230,64,79,0)');
+      c.fillStyle = fg;
+      c.beginPath();
+      c.arc(x, y, e.r * (1.4 + fp), 0, Math.PI * 2);
       c.fill();
       c.restore();
     }
