@@ -35,6 +35,19 @@ export default function App() {
   const [end, setEnd] = useState<EndStats | null>(null);
   const [muted, setMutedState] = useState(false);
   const [runId, setRunId] = useState(0);
+  const [fatal, setFatal] = useState<string | null>(null);
+
+  /* surface any runtime error instead of a silent black screen */
+  useEffect(() => {
+    const onErr = (e: ErrorEvent) => setFatal((f) => f ?? `${e.message} @ ${e.filename?.split('/').pop() ?? '?'}:${e.lineno}`);
+    const onRej = (e: PromiseRejectionEvent) => setFatal((f) => f ?? String(e.reason));
+    window.addEventListener('error', onErr);
+    window.addEventListener('unhandledrejection', onRej);
+    return () => {
+      window.removeEventListener('error', onErr);
+      window.removeEventListener('unhandledrejection', onRej);
+    };
+  }, []);
 
   /* auto-clear transient overlays */
   useEffect(() => {
@@ -74,6 +87,7 @@ export default function App() {
       onChest: (r) => { setRewards(r); setOv('chest'); },
       onEvolve: (name, desc, flagship) => setFusion({ name, desc, flagship, id: Date.now() }),
       onBanner: (text, sub) => setBanner({ text, sub, id: Date.now() }),
+      onError: (m) => setFatal((f) => f ?? m),
     };
     const engine = new GloomfallEngine(canvasRef.current, cb, classRef.current);
     engine.setMutedState(muted);
@@ -158,6 +172,34 @@ export default function App() {
 
       {banner && inGame && <BossBanner key={banner.id} text={banner.text} sub={banner.sub} />}
       {fusion && inGame && <FusionFlash key={fusion.id} name={fusion.name} desc={fusion.desc} flagship={fusion.flagship} />}
+
+      {fatal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-ink/80 p-4 animate-fadein">
+          <div className="gothic-frame pixel-corners bg-panel p-6 max-w-lg w-full">
+            <h2 className="font-display text-3xl text-blood leading-none mb-2">A Hex Has Been Cast</h2>
+            <p className="text-parch text-sm font-bold mb-3">
+              The game hit a runtime error. It has been contained — you can dismiss this and keep playing, or reload.
+            </p>
+            <pre className="pixel-corners bg-ink border-2 border-line p-3 text-[11px] text-frost whitespace-pre-wrap break-all font-bold mb-4 max-h-40 overflow-auto">
+              {fatal}
+            </pre>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setFatal(null)}
+                className="pixel-corners bg-ember text-ink font-black px-5 py-2 hover:bg-fire transition-colors cursor-pointer"
+              >
+                CONTINUE
+              </button>
+              <button
+                onClick={() => window.location.reload()}
+                className="pixel-corners bg-panel2 border-2 border-line text-parch font-black px-5 py-2 hover:text-ember transition-colors cursor-pointer"
+              >
+                RELOAD
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
